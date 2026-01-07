@@ -1,4 +1,12 @@
-import 'dotenv/config';
+// Load .env only in local dev. On Railway/production, env vars are injected.
+// Guarded so missing dotenv never crashes production.
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    await import('dotenv/config');
+  } catch (e) {
+    console.warn('[env] dotenv not loaded (missing dependency?)');
+  }
+}
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -16,13 +24,18 @@ const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 8787;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 const app = express();
 
-app.use(cors({
-  origin: CLIENT_ORIGIN,
-  credentials: false,
-}));
+// In production (Option A), the client is served by this same Express app
+// so requests are same-origin and CORS is unnecessary.
+if (!IS_PROD) {
+  app.use(cors({
+    origin: CLIENT_ORIGIN,
+    credentials: false,
+  }));
+}
 app.use(express.json({ limit: '25mb' }));
 
 const TMP_DIR = process.env.TMP_DIR || path.join(__dirname, '.tmp');
@@ -253,10 +266,10 @@ app.get('/api/export_job/:id/pptx', async (req, res) => {
  * GET /api/export_job/:id/thumb/:idx.png
  * Serves per-slide PNG thumbnails generated during export (LibreOffice).
  */
-app.get('/api/export_job/:id/thumb/:idx', async (req, res) => {
+app.get('/api/export_job/:id/thumb/:idx.png', async (req, res) => {
   const id = req.params.id;
   const job = exportJobs.get(id);
-  const idx = Number.parseInt((req.params.idx || '').toString().replace(/\.png$/i,''), 10);
+  const idx = Number.parseInt(req.params.idx, 10);
   if (!job) return res.status(404).end();
   if (!Number.isFinite(idx) || idx < 0) return res.status(400).end();
 
@@ -282,7 +295,7 @@ app.get('/api/export_job/:id/thumb/:idx', async (req, res) => {
 
 // Serve production client build if you want to deploy as a single app
 const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
-if (fs.existsSync(CLIENT_DIST)) {
+if (await fs.pathExists(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST));
   app.get('*', (req, res) => res.sendFile(path.join(CLIENT_DIST, 'index.html')));
 }
