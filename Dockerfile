@@ -1,6 +1,5 @@
 FROM node:20-bullseye
 
-# LibreOffice for PPTX -> PNG thumbnails + common fonts
 RUN apt-get update && apt-get install -y \
   libreoffice \
   libreoffice-impress \
@@ -10,20 +9,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy manifests first for better Docker cache
+# Copy manifests first for caching
 COPY package*.json ./
 COPY server/package*.json server/
 COPY client/package*.json client/
 
-# Install root deps (if any), then server + client deps explicitly
+# Install deps explicitly
 RUN npm install
 RUN npm --prefix server install
 RUN npm --prefix client install
 
-# Copy the rest of the code
+# Copy the rest of the project
 COPY . .
 
-# Build client for production
+# Build client
 RUN npm --prefix client run build
 
 ENV NODE_ENV=production
