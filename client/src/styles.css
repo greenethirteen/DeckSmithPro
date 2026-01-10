@@ -12,3 +12,19 @@ body {
     radial-gradient(900px 520px at 95% 75%, rgba(251, 191, 36, 0.16), transparent 62%),
     linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,0.82) 60%, rgba(255,255,255,1) 100%);
 }
+
+
+/* Indeterminate progress bar (used during image generation stage) */
+@keyframes ds-indeterminate {
+  0% { transform: translateX(-60%); }
+  100% { transform: translateX(160%); }
+}
+.ds-indeterminate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  border-radius: 9999px;
+  background: rgba(255,255,255,0.85);
+  animation: ds-indeterminate 1.15s infinite ease-in-out;
+}

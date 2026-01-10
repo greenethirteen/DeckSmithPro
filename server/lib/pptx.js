@@ -135,6 +135,70 @@ function bodyStyle(theme, fontSize) {
   };
 }
 
+
+function normalizeBulletsInput(bullets) {
+  if (!bullets) return [];
+  if (Array.isArray(bullets)) {
+    // If the model stuffed multiple bullets into a single string using •, split them.
+    if (bullets.length === 1 && typeof bullets[0] === 'string' && bullets[0].includes('•')) {
+      return bullets[0].split('•').map(s => s.trim()).filter(Boolean);
+    }
+    return bullets.map(v => (typeof v === 'string' ? v : String(v))).map(s => s.trim()).filter(Boolean);
+  }
+  if (typeof bullets === 'string') {
+    if (bullets.includes('•')) return bullets.split('•').map(s => s.trim()).filter(Boolean);
+    if (bullets.includes('\n')) return bullets.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    return [bullets.trim()].filter(Boolean);
+  }
+  return [String(bullets).trim()].filter(Boolean);
+}
+
+function clampBullets(arr, { max = 6, maxLen = 130 } = {}) {
+  const out = [];
+  for (const raw of (Array.isArray(arr) ? arr : [])) {
+    let s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+    if (!s) continue;
+    if (s.length > maxLen) s = s.slice(0, maxLen - 1).trim() + '…';
+    out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function looksLikeColumnHeaders(bullets) {
+  const b = clampBullets(bullets, { max: 8, maxLen: 40 });
+  if (!b.length) return false;
+  const set = new Set(b.map(s => s.toLowerCase()));
+  const headerWords = ['workstream','owner','eta','status','timeline','milestone','priority','impact'];
+  const hits = headerWords.filter(w => set.has(w));
+  return hits.length >= 3;
+}
+
+function repairPlanForExport(plan, options = {}) {
+  if (!plan || !Array.isArray(plan.slides)) return plan;
+
+  const maxBullets = Number.isFinite(options.maxBullets) ? options.maxBullets : 6;
+
+  for (const s of plan.slides) {
+    // Normalize bullets
+    const norm = normalizeBulletsInput(s?.bullets);
+    s.bullets = clampBullets(norm, { max: maxBullets });
+
+    // If a "challenge" (full-bleed) slide accidentally became column headers, swap in meaningful defaults.
+    const layout = (s?.layout || '').toString().toLowerCase();
+    if (layout === 'full_bleed' && looksLikeColumnHeaders(norm)) {
+      s.bullets = [
+        'Information is fragmented across channels, so people can’t discover opportunities quickly.',
+        'There’s no single source of truth for who does what and how to connect.',
+        'Engagement tends to be event-based, so momentum fades between touchpoints.',
+        'Value isn’t tracked or showcased, which slows adoption.'
+      ].slice(0, maxBullets);
+    }
+  }
+
+  return plan;
+}
+
 export async function exportPptx(plan, options = {}, ctx = {}) {
   const tmpDir = ctx.tmpDir || path.resolve('.tmp');
   await ensureCleanTmp(tmpDir);
@@ -147,6 +211,7 @@ export async function exportPptx(plan, options = {}, ctx = {}) {
   // Theme + deck style preset
   const deckStyleId = options.deckStyle || options.deck_style || plan.theme?.deck_style;
   const preset = getDeckStylePreset(deckStyleId);
+  repairPlanForExport(plan, options);
 
   const theme = {
     primary: normalizeHex(plan.theme?.primary_color, '#0B0F1A'),
@@ -173,7 +238,11 @@ export async function exportPptx(plan, options = {}, ctx = {}) {
     imageConcurrency: options.imageConcurrency ?? 2,
     imageSize: options.imageSize ?? "1024x1024",
     imageStyle: options.imageStyle ?? theme.style?.imageHint ?? theme.vibe,
-    deckStyle: theme.style?.id
+    deckStyle: theme.style?.id,
+    onProgress: ({ done, total }) => {
+      if (!total) return;
+      ctx.onStatus?.({ phase: 'generating_images', message: `Generating images… (${done}/${total})` });
+    }
   });
 
   ctx.onStatus?.({ phase: 'images_ready', message: 'Images ready. Rendering slides…' });
@@ -443,7 +512,7 @@ async function renderFullBleed(pptx, slide, theme, imageFile, tmpDir, imgCropCac
   s.addText(slide.title, {
     x: 1.2, y: 2.4, w: SLIDE_W - 2.4, h: 1.4,
     ...headlineStyle(theme, 56),
-    color: 'FFFFFF',
+    color: theme.primary,
     align: 'center'
   });
 
@@ -451,7 +520,7 @@ async function renderFullBleed(pptx, slide, theme, imageFile, tmpDir, imgCropCac
     s.addText(slide.subtitle, {
       x: 1.8, y: 3.9, w: SLIDE_W - 3.6, h: 0.8,
       ...bodyStyle(theme, theme.style?.bodySize ?? 18),
-      color: 'FFFFFF',
+      color: theme.primary,
       align: 'center'
     });
   }
@@ -567,7 +636,7 @@ async function renderStats(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
   s.addText(slide.title, {
     x: 0.8, y: 0.8, w: 5.0, h: 0.8,
     ...bodyStyle(theme, 14),
-    color: 'FFFFFF'
+    color: theme.primary
   });
 
   s.addText(statVal, {
@@ -626,14 +695,14 @@ async function renderTwoColumn(pptx, slide, theme, imageFile, tmpDir, imgCropCac
   s.addText(slide.title, {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.9,
     ...headlineStyle(theme, 46),
-    color: 'FFFFFF'
+    color: theme.primary
   });
 
   if (slide.subtitle) {
     s.addText(slide.subtitle, {
       x: 0.9, y: 1.55, w: SLIDE_W - 1.8, h: 0.5,
       ...bodyStyle(theme, 14),
-      color: 'FFFFFF'
+      color: theme.primary
     });
   }
 
@@ -706,14 +775,14 @@ async function renderSectionHeader(pptx, slide, theme, imageFile, tmpDir, imgCro
   s.addText(slide.title, {
     x: 0.9, y: 2.2, w: SLIDE_W - 1.8, h: 1.8,
     ...headlineStyle(theme, 68),
-    color: 'FFFFFF'
+    color: theme.primary
   });
 
   if (slide.subtitle) {
     s.addText(slide.subtitle, {
       x: 0.9, y: 4.2, w: SLIDE_W - 1.8, h: 1.2,
       ...bodyStyle(theme, 20),
-      color: 'FFFFFF'
+      color: theme.primary
     });
   }
 
@@ -889,14 +958,14 @@ async function renderImageCaption(pptx, slide, theme, imageFile, tmpDir, imgCrop
   s.addText(slide.title, {
     x: 1.2, y: 6.02, w: SLIDE_W - 2.4, h: 0.55,
     ...headlineStyle(theme, 34),
-    color: 'FFFFFF'
+    color: theme.primary
   });
 
   if (slide.subtitle) {
     s.addText(slide.subtitle, {
       x: 1.2, y: 6.55, w: SLIDE_W - 2.4, h: 0.5,
       ...bodyStyle(theme, 14),
-      color: 'FFFFFF'
+      color: theme.primary
     });
   }
 
@@ -952,8 +1021,8 @@ async function renderTimeline(pptx, slide, theme, imageFile, tmpDir, imgCropCach
     });
     s.addShape(pptx.ShapeType.ellipse, {
       x: x - 0.08, y: yLine - 0.10, w: 0.16, h: 0.16,
-      fill: { color: 'FFFFFF' },
-      line: { color: 'FFFFFF' }
+      fill: { color: theme.primary },
+      line: { color: theme.primary }
     });
 
     const boxY = up ? 2.2 : 4.65;
@@ -1093,7 +1162,7 @@ async function renderKpiDashboard(pptx, slide, theme, imageFile, tmpDir, imgCrop
 async function renderTrafficLight(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title, {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.8,
@@ -1131,7 +1200,7 @@ async function renderTrafficLight(pptx, slide, theme, imageFile, tmpDir, imgCrop
     s.addText(h, {
       x: x + 0.2, y: tableY + 0.12, w: colW[i] - 0.4, h: 0.3,
       ...bodyStyle(theme, 12),
-      color: 'FFFFFF'
+      color: theme.primary
     });
     x += colW[i];
   });
@@ -1246,7 +1315,7 @@ async function renderTable(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
     s.addText(headers[c], {
       x: x + c * colW + 0.15, y: y + 0.12, w: colW - 0.3, h: 0.3,
       ...bodyStyle(theme, 12),
-      color: 'FFFFFF'
+      color: theme.primary
     });
   }
 
@@ -1272,7 +1341,7 @@ async function renderTable(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
 async function renderPricing(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title, {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.8,
@@ -1322,7 +1391,7 @@ async function renderPricing(pptx, slide, theme, imageFile, tmpDir, imgCropCache
       s.addText('RECOMMENDED', {
         x: x + cardW - 1.33, y: y + 0.31, w: 1.06, h: 0.22,
         ...bodyStyle(theme, 8),
-        color: 'FFFFFF',
+        color: theme.primary,
         align: 'center'
       });
     }
@@ -1369,7 +1438,7 @@ async function renderPricing(pptx, slide, theme, imageFile, tmpDir, imgCropCache
 async function renderComparisonMatrix(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title, {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.8,
@@ -1426,7 +1495,7 @@ async function renderComparisonMatrix(pptx, slide, theme, imageFile, tmpDir, img
       w: colW - 0.2,
       h: rowH - 0.2,
       ...bodyStyle(theme, 12),
-      color: 'FFFFFF',
+      color: theme.primary,
       align: 'center',
       valign: 'mid'
     });
@@ -1477,7 +1546,7 @@ async function renderComparisonMatrix(pptx, slide, theme, imageFile, tmpDir, img
 async function renderProcessSteps(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title, {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.8,
@@ -1523,7 +1592,7 @@ async function renderProcessSteps(pptx, slide, theme, imageFile, tmpDir, imgCrop
     s.addText(String(i + 1), {
       x: x + 0.25, y: y0 + 0.33, w: 0.45, h: 0.3,
       ...bodyStyle(theme, 14),
-      color: 'FFFFFF',
+      color: theme.primary,
       align: 'center'
     });
 
@@ -1557,7 +1626,7 @@ async function renderProcessSteps(pptx, slide, theme, imageFile, tmpDir, imgCrop
 async function renderTeamGrid(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title || 'Team', {
     x: 0.9, y: 0.65, w: SLIDE_W - 1.8, h: 0.8,
@@ -1631,7 +1700,7 @@ async function renderTeamGrid(pptx, slide, theme, imageFile, tmpDir, imgCropCach
 async function renderLogoWall(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  s.background = { color: 'FFFFFF' };
+  s.background = { color: theme.primary };
 
   s.addText(slide.title || 'Clients & Partners', {
     x: 0.9, y: 0.75, w: SLIDE_W - 1.8, h: 0.8,
@@ -1690,7 +1759,7 @@ async function renderLogoWall(pptx, slide, theme, imageFile, tmpDir, imgCropCach
   s.addText('PROOF', {
     x: SLIDE_W - 2.2, y: SLIDE_H - 0.82, w: 1.3, h: 0.3,
     ...bodyStyle(theme, 11),
-    color: 'FFFFFF',
+    color: theme.primary,
     align: 'center'
   });
 
@@ -1728,7 +1797,7 @@ async function renderCTA(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
     s.addText(slide.subtitle, {
       x: 0.9, y: 3.55, w: SLIDE_W - 1.8, h: 0.7,
       ...bodyStyle(theme, 18),
-      color: 'FFFFFF'
+      color: theme.primary
     });
   }
 
@@ -1952,17 +2021,17 @@ async function renderCaseStudy(pptx, slide, theme, imageFile, tmpDir, imgCropCac
   s.addShape(panelType, { x: 7.1, y: 2.05, w: 5.33, h: 5.1, ...pStyle });
 
   s.addText(`Client`, { x: 1.15, y: 2.25, w: 5.8, h: 0.35, ...headlineStyle(theme, 16), color: '111111' });
-  s.addText(cs.client || '(client name)', { x: 1.15, y: 2.62, w: 5.8, h: 0.4, ...bodyStyle(theme, 14), color:'111111' });
+  s.addText(cs.client || '—', { x: 1.15, y: 2.62, w: 5.8, h: 0.4, ...bodyStyle(theme, 14), color:'111111' });
 
   s.addText(`Challenge`, { x: 1.15, y: 3.15, w: 5.8, h: 0.35, ...headlineStyle(theme, 16), color: '111111' });
-  s.addText(cs.challenge || '(challenge)', { x: 1.15, y: 3.52, w: 5.8, h: 0.9, ...bodyStyle(theme, 14), color:'111111' });
+  s.addText(cs.challenge || '—', { x: 1.15, y: 3.52, w: 5.8, h: 0.9, ...bodyStyle(theme, 14), color:'111111' });
 
   s.addText(`Approach`, { x: 1.15, y: 4.55, w: 5.8, h: 0.35, ...headlineStyle(theme, 16), color: '111111' });
-  const ap = safeArr(cs.approach).slice(0, 6).map(v => `• ${v}`).join('\n') || '• (add approach steps)';
+  const ap = safeArr(cs.approach).slice(0, 6).map(v => `• ${v}`).join('\n') || '—';
   s.addText(ap, { x: 1.15, y: 4.92, w: 5.8, h: 2.0, ...bodyStyle(theme, 14), color:'111111' });
 
   s.addText(`Results`, { x: 7.35, y: 2.25, w: 4.9, h: 0.35, ...headlineStyle(theme, 16), color: '111111' });
-  const res = safeArr(cs.results).slice(0, 8).map(v => `• ${v}`).join('\n') || '• (add results)';
+  const res = safeArr(cs.results).slice(0, 8).map(v => `• ${v}`).join('\n') || '—';
   s.addText(res, { x: 7.35, y: 2.62, w: 4.9, h: 4.3, ...bodyStyle(theme, 14), color:'111111' });
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);

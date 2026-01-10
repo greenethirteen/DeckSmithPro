@@ -18,41 +18,60 @@ export async function generateImages(slides, theme, tmpDir, opts = {}) {
   const concurrency = Math.max(1, Math.min(3, Number(opts.imageConcurrency || 2)));
   const limit = pLimit(concurrency);
 
-  const results = await Promise.all(slides.map((slide, idx) => limit(async () => {
-    const prompt = buildImagePrompt(slide, theme, opts);
-    if (!prompt) return { idx, file: null, prompt: null };
+  // Precompute prompts so we can report progress accurately.
+  const prepared = (Array.isArray(slides) ? slides : []).map((slide, idx) => ({
+    slide,
+    idx,
+    prompt: buildImagePrompt(slide, theme, opts)
+  }));
 
-    let b64 = null;
+  const total = prepared.filter(p => p.prompt).length;
+  let done = 0;
 
-    if (provider === 'gemini') {
-      const img = await geminiGenerateImage({
-        model: geminiImageModel,
-        prompt,
-        aspectRatio: opts.geminiAspectRatio || '16:9',
-        imageSize: opts.geminiImageSize || '2K'
-      });
-      b64 = img.base64;
-    } else {
-      const result = await client.images.generate({
-        model: openaiImageModel,
-        prompt,
-        // We'll resize/crop for PPTX anyway.
-        size: opts.imageSize || '1024x1024'
-      });
-      b64 = result?.data?.[0]?.b64_json;
-    }
+  const results = await Promise.all(prepared.map((p) => {
+    if (!p.prompt) return Promise.resolve({ idx: p.idx, file: null, prompt: null });
 
-    if (!b64) return { idx, file: null, prompt };
+    return limit(async () => {
+      let b64 = null;
 
-    const rawPath = path.join(tmpDir, `img_raw_${idx}_${nanoid(6)}.png`);
-    await fs.writeFile(rawPath, Buffer.from(b64, 'base64'));
+      if (provider === 'gemini') {
+        const img = await geminiGenerateImage({
+          model: geminiImageModel,
+          prompt: p.prompt,
+          aspectRatio: opts.geminiAspectRatio || '16:9',
+          imageSize: opts.geminiImageSize || '2K'
+        });
+        b64 = img.base64;
+      } else {
+        const result = await client.images.generate({
+          model: openaiImageModel,
+          prompt: p.prompt,
+          // We'll resize/crop for PPTX anyway.
+          size: opts.imageSize || '1024x1024'
+        });
+        b64 = result?.data?.[0]?.b64_json || null;
+      }
 
-    // Create derivative (16:9) used by all renderers.
-    const full = path.join(tmpDir, `img_full_${idx}_${nanoid(6)}.png`);
-    await coverTo(rawPath, full, 1600, 900);
+      const rawName = `img_${p.idx}_${nanoid(6)}.png`;
+      const rawPath = path.join(tmpDir, rawName);
+      const full = path.join(tmpDir, `img_${p.idx}.jpg`);
 
-    return { idx, file: full, prompt };
-  })));
+      if (b64) {
+        await fs.writeFile(rawPath, Buffer.from(b64, 'base64'));
+        await coverTo(rawPath, full, 1600, 900);
+        await fs.remove(rawPath).catch(() => {});
+        return { idx: p.idx, file: full, prompt: p.prompt };
+      }
+
+      return { idx: p.idx, file: null, prompt: p.prompt };
+    }).finally(() => {
+      // Progress callback is optional; it drives UI feedback during image generation.
+      if (p.prompt) {
+        done += 1;
+        try { opts.onProgress?.({ done, total, idx: p.idx, prompt: p.prompt }); } catch {}
+      }
+    });
+  }));
 
   // Map by slide index
   const byIdx = {};
@@ -61,7 +80,25 @@ export async function generateImages(slides, theme, tmpDir, opts = {}) {
 }
 
 function buildImagePrompt(slide, theme, opts) {
-  const base = (slide?.image_prompt || '').toString().trim();
+  let base = (slide?.image_prompt || '').toString().trim();
+
+  // If the planner omitted an image prompt for an image-heavy layout, create a safe fallback prompt.
+  const layout = (slide?.layout || slide?.kind || '').toString().toLowerCase();
+  const wantsImage = ['hero','full_bleed','split','section_header','image_caption','case_study','quote','execution_example','execution_examples']
+    .some(k => layout.includes(k));
+
+  if ((!base || /^none$/i.test(base)) && opts.autoImagePrompts !== false && wantsImage) {
+    const t = (slide?.title || '').toString().trim();
+    const sub = (slide?.subtitle || '').toString().trim();
+    const b = Array.isArray(slide?.bullets) ? slide.bullets.slice(0, 4).join('; ') : '';
+    base = [
+      t ? `Background visual for: "${t}".` : 'Background visual for a presentation slide.',
+      sub ? `Subtitle context: "${sub}".` : '',
+      b ? `Key points: ${b}.` : '',
+      'Use a metaphorical, business-safe scene that supports the message.'
+    ].filter(Boolean).join(' ');
+  }
+
   if (!base || /^none$/i.test(base)) return null;
 
   const preset = getDeckStylePreset(opts.deckStyle || opts.deck_style || theme.deck_style);
