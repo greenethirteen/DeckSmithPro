@@ -108,6 +108,30 @@ export const DECK_STYLE_PRESETS = {
     accentThickness: 0.08,
     promptHint: 'Abstract gradient mesh, cinematic lighting, color blobs, glossy, soft noise, no text',
     imageHint: 'Abstract gradient mesh, cinematic, glossy color blobs, soft noise'
+  },
+
+  // For creative/agency decks: bold typographic layouts + clean whitespace.
+  // Pairs best with short headlines and punchy subheads.
+  agency_typographic: {
+    id: 'agency_typographic',
+    label: 'Agency Typographic',
+    corner: 'sharp',
+    headingFont: 'Arial Black',
+    bodyFont: 'Arial',
+    titleSize: 78,
+    subtitleSize: 22,
+    bodySize: 18,
+    overlayLight: 70,
+    overlayDark: 80,
+    panelFill: 'FFFFFF',
+    panelTransparency: 0,
+    panelLine: 'FFFFFF',
+    panelLineTransparency: 100,
+    panelLineWidth: 0,
+    borderWidth: 0,
+    accentThickness: 0.10,
+    promptHint: 'Modern ad-agency key visual, high-contrast editorial lighting, minimal composition, generous negative space, subtle grain, no text',
+    imageHint: 'Modern ad-agency key visual, high-contrast editorial, minimal, subtle grain'
   }
 };
 

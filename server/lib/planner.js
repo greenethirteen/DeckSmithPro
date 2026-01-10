@@ -92,6 +92,10 @@ export const SLIDE_LAYOUTS = [
   'quote',
   'stats',
   'two_column',
+  // agency-only (bold typographic)
+  'agency_center',
+  'agency_half',
+  'agency_infographic',
   // new (reusable across many deck types)
   'section_header',
   'agenda',
@@ -207,32 +211,75 @@ function lockNarrativeToAgency10(narrativeJson, extractJson) {
   };
 }
 
-function lockDeckPlanToAgency10(deckPlan, extractJson) {
+function isAgencyTypographic(options = {}) {
+  const ds = asStr(options.deckStyle || options.deck_style || '', 80).trim().toLowerCase();
+  return ds === 'agency_typographic';
+}
+
+function lockDeckPlanToAgency10(deckPlan, extractJson, options = {}) {
   const title = asStr(deckPlan?.deck_title || extractJson?.title || 'Creative Campaign', 120);
   const subtitle = asStr(deckPlan?.deck_subtitle || extractJson?.subtitle || '', 140);
 
+  const typographic = isAgencyTypographic(options);
+
   // Map desired slide kind -> default layout
-  const defaultLayoutByKind = {
-    title: 'hero',
-    cover: 'hero',
-    current_audience: 'cards',
-    audience: 'cards',
-    about_brand: 'split',
-    brand: 'split',
-    challenge: 'full_bleed',
-    problem: 'full_bleed',
-    opportunity: 'two_column',
-    insight_or_reframe: 'two_column',
-    communication_pillars: 'process_steps',
-    strategy_pillars: 'process_steps',
-    creative_concept: 'hero',
-    big_idea: 'hero',
-    visual_identity: 'image_caption',
-    visual_direction: 'image_caption',
-    execution_example: 'full_bleed',
-    execution_examples: 'full_bleed',
-    thank_you: 'hero',
-    close: 'hero'
+  const defaultLayoutByKind = typographic
+    ? {
+      title: 'agency_center',
+      cover: 'agency_center',
+      current_audience: 'agency_infographic',
+      audience: 'agency_infographic',
+      about_brand: 'agency_half',
+      brand: 'agency_half',
+      challenge: 'agency_half',
+      problem: 'agency_half',
+      opportunity: 'agency_infographic',
+      insight_or_reframe: 'agency_infographic',
+      communication_pillars: 'agency_infographic',
+      strategy_pillars: 'agency_infographic',
+      creative_concept: 'agency_center',
+      big_idea: 'agency_center',
+      visual_identity: 'agency_half',
+      visual_direction: 'agency_half',
+      execution_example: 'full_bleed',
+      execution_examples: 'full_bleed',
+      thank_you: 'agency_center',
+      close: 'agency_center'
+    }
+    : {
+      title: 'hero',
+      cover: 'hero',
+      current_audience: 'cards',
+      audience: 'cards',
+      about_brand: 'split',
+      brand: 'split',
+      challenge: 'full_bleed',
+      problem: 'full_bleed',
+      opportunity: 'two_column',
+      insight_or_reframe: 'two_column',
+      communication_pillars: 'process_steps',
+      strategy_pillars: 'process_steps',
+      creative_concept: 'hero',
+      big_idea: 'hero',
+      visual_identity: 'image_caption',
+      visual_direction: 'image_caption',
+      execution_example: 'full_bleed',
+      execution_examples: 'full_bleed',
+      thank_you: 'hero',
+      close: 'hero'
+    };
+
+  const defaultImagePromptByKind = {
+    title: 'High-contrast abstract campaign key visual, premium editorial lighting, minimal, no text',
+    current_audience: 'Modern editorial audience collage, diverse silhouettes, premium lighting, minimal, no text',
+    about_brand: 'Premium brand essence key visual, clean minimal composition, no text',
+    challenge: 'Dramatic abstract tension visual, high contrast, minimal, no text',
+    opportunity: 'Optimistic breakthrough abstract visual, premium lighting, minimal, no text',
+    communication_pillars: 'Minimal bento-style abstract icons and shapes, premium, high contrast, no text',
+    creative_concept: 'Signature campaign platform key visual, iconic, bold, minimal, no text',
+    visual_identity: 'Design system moodboard: materials, textures, color swatches, minimal, no text',
+    execution_example: 'Cinematic outdoor advertising mockup scene, generic, premium lighting, no logos, no text',
+    thank_you: 'Soft gradient background, premium minimal, no text'
   };
 
   const existing = Array.isArray(deckPlan?.slides) ? deckPlan.slides : [];
@@ -265,7 +312,9 @@ function lockDeckPlanToAgency10(deckPlan, extractJson) {
       bullets: Array.isArray(match?.bullets) ? match.bullets : [],
       stat: match?.stat ?? null,
       quote: match?.quote ?? null,
-      image_prompt: typeof match?.image_prompt === 'string' ? match.image_prompt : (baseKind === 'creative_concept' ? 'High-contrast abstract campaign key visual, premium editorial lighting, minimal, no text' : 'NONE'),
+      image_prompt: typeof match?.image_prompt === 'string'
+        ? match.image_prompt
+        : (defaultImagePromptByKind[baseKind] || 'High-contrast abstract campaign key visual, premium editorial lighting, minimal, no text'),
       speaker_notes: match?.speaker_notes || '',
       setup_line: match?.setup_line || '',
       takeaway: match?.takeaway || '',
@@ -276,6 +325,12 @@ function lockDeckPlanToAgency10(deckPlan, extractJson) {
     if (baseKind === 'creative_concept') {
       safe.subtitle = safe.subtitle || 'The big idea in one line.';
       safe.bullets = safe.bullets?.slice(0, 3);
+    }
+
+    // Agency typographic mode: keep slides sparse (big type, short subhead, minimal support lines)
+    if (typographic) {
+      const maxBullets = (baseKind === 'communication_pillars' || baseKind === 'current_audience' || baseKind === 'opportunity') ? 3 : 2;
+      safe.bullets = Array.isArray(safe.bullets) ? safe.bullets.slice(0, maxBullets) : [];
     }
     return safe;
   });
@@ -1656,7 +1711,7 @@ export async function planDeck(briefText, options = {}) {
 
   // Final enforcement: exactly 10 slides in the required order for agency creative decks.
 let planLocked = shouldLockAgency10(extract, options)
-  ? lockDeckPlanToAgency10(plan, extract)
+  ? lockDeckPlanToAgency10(plan, extract, options)
   : plan;
 
 // Agency-only: refine concept line quality (no structure changes)

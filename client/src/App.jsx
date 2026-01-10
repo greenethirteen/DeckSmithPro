@@ -208,19 +208,17 @@ export default function App() {
     return Math.min(100, Math.round((doneCount / totalCount) * 100))
   }, [exportThumbs])
 
-  const overlayPct = planning ? planPct : exportPct;
-  const isIndeterminate = (!planning && exportRunning && exportPct === 0 && /image/i.test(exportPhase || ''));
+  const overlayPct = planning ? planPct : exportPct
 
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_10%,rgba(59,130,246,0.18),transparent_45%),radial-gradient(circle_at_80%_15%,rgba(236,72,153,0.18),transparent_45%),radial-gradient(circle_at_40%_90%,rgba(16,185,129,0.18),transparent_45%),linear-gradient(180deg,rgba(255,255,255,1),rgba(255,255,255,0.7))]">
       {(planning || exportRunning) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/15 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/30 backdrop-blur-md">
           <div className="w-[min(560px,92vw)] rounded-3xl border border-white/50 bg-white/55 p-6 shadow-[0_20px_80px_rgba(0,0,0,0.12)] backdrop-blur-2xl ring-1 ring-white/40">
             <div className="text-sm font-semibold text-zinc-800">{planning ? 'Generating outline' : 'Exporting PPTX'}</div>
             <div className="mt-1 text-xs text-zinc-600">
               {planning ? 'Turning your brief into a clean slide plan…' : (exportPhase || 'Rendering slides…')}
-              {!planning && exportRunning && /image/i.test(exportPhase || '') ? ' (This can take a minute.)' : ''}
             </div>
 
             <div className="mt-4">
@@ -228,15 +226,11 @@ export default function App() {
                 <span>{planning ? 'Planning' : `${exportThumbs.filter(Boolean).length}/${exportThumbs.length || 0} slides`}</span>
                 <span>{overlayPct}%</span>
               </div>
-              <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-white/55 relative">
-                {isIndeterminate ? (
-                  <div className="ds-indeterminate absolute inset-0" />
-                ) : (
-                  <div
-                    className="h-2.5 bg-gradient-to-r from-sky-400 via-fuchsia-400 to-amber-300"
-                    style={{ width: `${overlayPct}%` }}
-                  />
-                )}
+              <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-white/55">
+                <div
+                  className="h-2.5 bg-gradient-to-r from-sky-400 via-fuchsia-400 to-amber-300"
+                  style={{ width: `${overlayPct}%` }}
+                />
               </div>
             </div>
 
@@ -419,6 +413,7 @@ export default function App() {
                     className="w-full rounded-xl border border-white/60 bg-white/55 px-3 py-2 text-sm"
                   >
                     <option value="classic">Classic Premium</option>
+                    <option value="agency_typographic">Agency Typographic</option>
                     <option value="neo_brutal">Neo‑Brutalist</option>
                     <option value="bento_minimal">Bento Minimal</option>
                     <option value="gradient_mesh">Gradient Mesh</option>
