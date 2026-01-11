@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { generateImages } from './images.js';
 import { ensureCleanTmp, getLuminance } from './util.js';
 import { normalizeHex, pickFont, getDeckStylePreset } from './themes.js';
+import { renderChart, renderDiagram, getIcon, toDataUri } from './graphics/index.js';
 
 const SLIDE_W = 13.333; // inches for LAYOUT_WIDE
 const SLIDE_H = 7.5;
@@ -98,6 +99,28 @@ function infographicIconSvg(kind, color) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="${stroke}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><line x1="40" y1="20" x2="32" y2="100"/><line x1="78" y1="20" x2="70" y2="100"/><line x1="20" y1="44" x2="100" y2="44"/><line x1="16" y1="76" x2="96" y2="76"/><circle cx="92" cy="92" r="16"/></svg>`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="${stroke}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><path d="M60 110C60 110 32 76 32 50C32 33 45 20 60 20C75 20 88 33 88 50C88 76 60 110 60 110Z"/><circle cx="60" cy="50" r="12"/></svg>`;
+}
+
+async function renderGraphicData({ type, payload, width, height, theme }) {
+  if (type === 'chart') {
+    const spec = payload?.spec;
+    if (!spec) return null;
+    const out = await renderChart({ spec, width, height });
+    return toDataUri(out);
+  }
+  if (type === 'diagram') {
+    const code = payload?.code || '';
+    if (!code) return null;
+    const out = await renderDiagram({ code, width, height, theme: payload?.theme || 'default' });
+    return toDataUri(out);
+  }
+  if (type === 'icon') {
+    const name = payload?.name || '';
+    if (!name) return null;
+    const out = await getIcon({ name, width, height });
+    return toDataUri(out);
+  }
+  return null;
 }
 
 function addSlideFrame(slide, pptx, theme) {
@@ -331,6 +354,8 @@ async function renderByLayout(pptx, slide, plan, theme, imageFile, idx, tmpDir, 
       return renderChartBar(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
     case 'chart_line':
       return renderChartLine(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
+    case 'diagram':
+      return renderDiagramSlide(pptx, slide, theme, tmpDir, imgCropCache);
     case 'org_chart':
       return renderOrgChart(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
     case 'faq':
@@ -631,8 +656,35 @@ async function renderInfographic3(pptx, slide, theme) {
     const x = 0.8 + i * colW;
     const iconX = x + (colW - iconSize) / 2;
     const iconKind = (items[i]?.tag || '').toString().toLowerCase();
-    const svg = infographicIconSvg(iconKind, theme.secondary);
-    s.addImage({ data: svgToDataUri(svg), x: iconX, y: iconY, w: iconSize, h: iconSize });
+    const iconName = (items[i]?.icon || '').toString().trim();
+    let iconData = null;
+    if (iconName) {
+      try {
+        iconData = await renderGraphicData({
+          type: 'icon',
+          payload: { name: iconName },
+          width: 128,
+          height: 128,
+          theme
+        });
+      } catch {}
+    }
+    if (!iconData && iconKind.includes(':')) {
+      try {
+        iconData = await renderGraphicData({
+          type: 'icon',
+          payload: { name: iconKind },
+          width: 128,
+          height: 128,
+          theme
+        });
+      } catch {}
+    }
+    if (!iconData) {
+      const svg = infographicIconSvg(iconKind, theme.secondary);
+      iconData = svgToDataUri(svg);
+    }
+    s.addImage({ data: iconData, x: iconX, y: iconY, w: iconSize, h: iconSize });
 
     s.addText([
       { text: `${i + 1}. `, options: { color: theme.secondary } },
@@ -1171,6 +1223,38 @@ async function renderCards(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
     });
   }
 
+  const icons = safeArr(slide.icons).slice(0, 4);
+  if (icons.length) {
+    const iconSize = 0.4;
+    const startX = 0.9;
+    const gapX = 2.8;
+    for (let i = 0; i < icons.length; i++) {
+      const ic = icons[i] || {};
+      let iconData = null;
+      if (ic.name) {
+        try {
+          iconData = await renderGraphicData({
+            type: 'icon',
+            payload: { name: ic.name },
+            width: 96,
+            height: 96,
+            theme
+          });
+        } catch {}
+      }
+      if (iconData) {
+        s.addImage({ data: iconData, x: startX + i * gapX, y: 2.05, w: iconSize, h: iconSize });
+      }
+      if (ic.label) {
+        s.addText(ic.label, {
+          x: startX + i * gapX + 0.5, y: 2.03, w: 2.0, h: 0.45,
+          ...bodyStyle(theme, 12),
+          color: '555555'
+        });
+      }
+    }
+  }
+
   const cards = Array.isArray(slide.cards) && slide.cards.length
     ? slide.cards
     : (slide.bullets || []).slice(0, 4).map((b, i) => ({ title: `Point ${i + 1}`, body: b, tag: '' }));
@@ -1179,7 +1263,7 @@ async function renderCards(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
   const gap = 0.35;
   const cardW = (SLIDE_W - 1.8 - gap * (cols - 1)) / cols;
   const cardH = 4.6;
-  const topY = 2.35;
+  const topY = icons.length ? 2.65 : 2.35;
 
   cards.slice(0, cols).forEach((c, i) => {
     const x = 0.9 + i * (cardW + gap);
@@ -2346,6 +2430,20 @@ async function renderChartBar(pptx, slide, theme, imageFile, tmpDir, imgCropCach
   addTitleBlock(s, theme, slide.title, slide.subtitle, '111111');
 
   const chart = slide.chart || { labels: [], values: [], value_suffix: '' };
+  if (chart?.spec) {
+    const data = await renderGraphicData({
+      type: 'chart',
+      payload: chart,
+      width: 1200,
+      height: 700,
+      theme
+    });
+    if (data) {
+      s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
+      if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+      return;
+    }
+  }
   const labels = safeArr(chart.labels).slice(0, 8);
   const values = safeArr(chart.values).slice(0, labels.length).map(Number);
   const suf = chart.value_suffix || '';
@@ -2380,6 +2478,20 @@ async function renderChartLine(pptx, slide, theme, imageFile, tmpDir, imgCropCac
   addTitleBlock(s, theme, slide.title, slide.subtitle, '111111');
 
   const chart = slide.chart || { labels: [], values: [], value_suffix: '' };
+  if (chart?.spec) {
+    const data = await renderGraphicData({
+      type: 'chart',
+      payload: chart,
+      width: 1200,
+      height: 700,
+      theme
+    });
+    if (data) {
+      s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
+      if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+      return;
+    }
+  }
   const labels = safeArr(chart.labels).slice(0, 10);
   const values = safeArr(chart.values).slice(0, labels.length).map(Number);
   const suf = chart.value_suffix || '';
@@ -2411,6 +2523,38 @@ async function renderChartLine(pptx, slide, theme, imageFile, tmpDir, imgCropCac
     s.addShape(pptx.ShapeType.ellipse, { x: p.x-0.07, y: p.y-0.07, w: 0.14, h: 0.14, fill: { color: theme.secondary }, line: { color: theme.secondary }});
     s.addText(`${p.v}${suf}`, { x: p.x-0.35, y: p.y-0.35, w: 0.7, h: 0.25, fontFace: theme.bodyFont, fontSize: 10, color: '111111', align: 'center' });
     s.addText(labels[i] || '', { x: p.x-0.6, y: area.y + area.h + 0.05, w: 1.2, h: 0.4, fontFace: theme.bodyFont, fontSize: 11, color: '555555', align: 'center' });
+  }
+
+  if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+}
+
+async function renderDiagramSlide(pptx, slide, theme, tmpDir, imgCropCache) {
+  const s = pptx.addSlide();
+  addSlideFrame(s, pptx, theme);
+  s.background = { color: 'FFFFFF' };
+
+  addTitleBlock(s, theme, slide.title, slide.subtitle, '111111');
+
+  const data = await renderGraphicData({
+    type: 'diagram',
+    payload: slide.diagram || {},
+    width: 1200,
+    height: 700,
+    theme
+  });
+  if (data) {
+    s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
+  } else {
+    s.addShape(pptx.ShapeType.rect, {
+      x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3,
+      fill: { color: 'F2F2F2' },
+      line: { color: 'E0E0E0' }
+    });
+    s.addText('Add diagram code to render.', {
+      x: 1.1, y: 2.2, w: SLIDE_W - 2.2, h: 0.6,
+      ...bodyStyle(theme, 14),
+      color: '666666'
+    });
   }
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);

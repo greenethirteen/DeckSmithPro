@@ -119,6 +119,7 @@ export const SLIDE_LAYOUTS = [
   'case_study',
   'chart_bar',
   'chart_line',
+  'diagram',
   'org_chart',
   'faq',
   'appendix',
@@ -1163,17 +1164,44 @@ function buildDeckSchema() {
                 required: ['client', 'challenge', 'approach', 'results']
               },
 
+              // New: Mermaid diagram
+              diagram: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  code: { type: 'string' },
+                  theme: { type: 'string' }
+                },
+                required: ['code', 'theme']
+              },
+
+              // New: Icon list (Iconify names)
+              icons: {
+                type: ['array', 'null'],
+                maxItems: 6,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: 'string' },
+                    label: { type: 'string' }
+                  },
+                  required: ['name', 'label']
+                }
+              },
+
               // New: Simple charts
               chart: {
                 type: ['object', 'null'],
                 additionalProperties: false,
                 properties: {
                   chart_type: { type: 'string', enum: ['bar', 'line'] },
+                  spec: { type: ['object', 'null'] },
                   labels: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 10 },
                   values: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 10 },
                   value_suffix: { type: 'string' }
                 },
-                required: ['chart_type', 'labels', 'values', 'value_suffix']
+                required: ['chart_type', 'labels', 'values', 'value_suffix', 'spec']
               },
 
               // New: Org chart (simple)
@@ -1205,7 +1233,7 @@ function buildDeckSchema() {
               },
               speaker_notes: { type: 'string' }
             },
-            required: ['kind', 'layout', 'section', 'setup_line', 'takeaway', 'bridge_line', 'title', 'subtitle', 'bullets', 'stat', 'quote', 'agenda_items', 'cards', 'timeline_items', 'kpis', 'status_items', 'table', 'pricing', 'matrix', 'steps', 'people', 'logo_items', 'cta', 'swot', 'funnel', 'now_next_later', 'okrs', 'case_study', 'chart', 'org_chart', 'faq', 'image_prompt', 'speaker_notes']
+            required: ['kind', 'layout', 'section', 'setup_line', 'takeaway', 'bridge_line', 'title', 'subtitle', 'bullets', 'stat', 'quote', 'agenda_items', 'cards', 'timeline_items', 'kpis', 'status_items', 'table', 'pricing', 'matrix', 'steps', 'people', 'logo_items', 'cta', 'swot', 'funnel', 'now_next_later', 'okrs', 'case_study', 'diagram', 'icons', 'chart', 'org_chart', 'faq', 'image_prompt', 'speaker_notes']
           }
         }
       },
@@ -1884,6 +1912,8 @@ function defaultSlide(idx) {
     now_next_later: null,
     okrs: null,
     case_study: null,
+    diagram: null,
+    icons: null,
     chart: null,
     org_chart: null,
     faq: null,
@@ -1904,6 +1934,7 @@ function inferLayoutFromKind(kind) {
   if (k.includes('okr') || k.includes('okrs')) return 'okr';
   if (k.includes('case study') || k.includes('casestudy')) return 'case_study';
   if (k.includes('chart') || k.includes('trend')) return 'chart_line';
+  if (k.includes('diagram') || k.includes('flow')) return 'diagram';
   if (k.includes('org') || k.includes('organisation') || k.includes('organization')) return 'org_chart';
   if (k.includes('faq') || k.includes('q&a')) return 'faq';
   if (k.includes('kpi') || k.includes('metrics') || k.includes('dashboard')) return 'kpi_dashboard';
@@ -1987,7 +2018,21 @@ export function normalizePlan(plan, options = {}) {
       now_next_later: s?.now_next_later ?? null,
       okrs: Array.isArray(s?.okrs) ? s.okrs.slice(0, 5).map(o => ({ objective: asStr(o?.objective, 120), key_results: Array.isArray(o?.key_results) ? o.key_results.slice(0, 6).map(v => asStr(v, 160)).filter(Boolean) : [] })) : null,
       case_study: s?.case_study ?? null,
-      chart: s?.chart ?? null,
+      diagram: s?.diagram ? {
+        code: asStr(s.diagram.code || '', 4000),
+        theme: asStr(s.diagram.theme || '', 40)
+      } : null,
+      icons: Array.isArray(s?.icons) ? s.icons.slice(0, 6).map(ic => ({
+        name: asStr(ic?.name || '', 120),
+        label: asStr(ic?.label || '', 80)
+      })) : null,
+      chart: s?.chart ? {
+        chart_type: asStr(s.chart.chart_type || '', 20),
+        labels: Array.isArray(s.chart.labels) ? s.chart.labels.slice(0, 10).map(v => asStr(v, 80)) : [],
+        values: Array.isArray(s.chart.values) ? s.chart.values.slice(0, 10).map(v => Number(v)) : [],
+        value_suffix: asStr(s.chart.value_suffix || '', 20),
+        spec: s.chart.spec ?? null
+      } : null,
       org_chart: s?.org_chart ?? null,
       faq: Array.isArray(s?.faq) ? s.faq.slice(0, 8).map(it => ({ q: asStr(it?.q, 140), a: asStr(it?.a, 220) })) : null,
       image_prompt: asStr(s?.image_prompt ?? base.image_prompt, 800),
@@ -1995,7 +2040,7 @@ export function normalizePlan(plan, options = {}) {
     };
 
     // For data-heavy slides, default to no image unless explicitly provided.
-    if (['kpi_dashboard','traffic_light','table','pricing','comparison_matrix','process_steps','team_grid','logo_wall','swot','funnel','now_next_later','okr','chart_bar','chart_line','org_chart','faq','case_study','appendix','infographic_3'].includes(layout)) {
+    if (['kpi_dashboard','traffic_light','table','pricing','comparison_matrix','process_steps','team_grid','logo_wall','swot','funnel','now_next_later','okr','chart_bar','chart_line','diagram','org_chart','faq','case_study','appendix','infographic_3'].includes(layout)) {
       const p = (safe.image_prompt || '').trim();
       if (!p || /^none$/i.test(p)) safe.image_prompt = 'NONE';
     }
