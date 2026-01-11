@@ -1201,7 +1201,7 @@ function buildDeckSchema() {
                   values: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 10 },
                   value_suffix: { type: 'string' }
                 },
-                required: ['chart_type', 'labels', 'values', 'value_suffix', 'spec']
+                required: ['chart_type', 'labels', 'values', 'value_suffix']
               },
 
               // New: Org chart (simple)
@@ -1233,7 +1233,7 @@ function buildDeckSchema() {
               },
               speaker_notes: { type: 'string' }
             },
-            required: ['kind', 'layout', 'section', 'setup_line', 'takeaway', 'bridge_line', 'title', 'subtitle', 'bullets', 'stat', 'quote', 'agenda_items', 'cards', 'timeline_items', 'kpis', 'status_items', 'table', 'pricing', 'matrix', 'steps', 'people', 'logo_items', 'cta', 'swot', 'funnel', 'now_next_later', 'okrs', 'case_study', 'diagram', 'icons', 'chart', 'org_chart', 'faq', 'image_prompt', 'speaker_notes']
+            required: ['kind', 'layout', 'section', 'setup_line', 'takeaway', 'bridge_line', 'title', 'subtitle', 'bullets', 'stat', 'quote', 'agenda_items', 'cards', 'timeline_items', 'kpis', 'status_items', 'table', 'pricing', 'matrix', 'steps', 'people', 'logo_items', 'cta', 'swot', 'funnel', 'now_next_later', 'okrs', 'case_study', 'chart', 'org_chart', 'faq', 'image_prompt', 'speaker_notes']
           }
         }
       },

@@ -3,6 +3,9 @@ import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
 import { spawn } from 'child_process';
+import * as vega from 'vega';
+import * as vegaLite from 'vega-lite';
+import { loader as vegaLoader } from 'vega-loader';
 
 const ICON_CACHE = new Map();
 const ICON_CACHE_MAX = 200;
@@ -49,17 +52,21 @@ async function spawnCmd(cmd, args, opts = {}) {
 
 export async function renderChart({ spec, format, width = 1200, height = 800 }) {
   const fmt = resolveFormat(format);
-  const mod = await import('@vega/vl-convert');
-  if (fmt === 'svg') {
-    const fn = mod.vlToSvg || mod.vlToSVG || mod.default?.vlToSvg;
-    if (!fn) throw new Error('Vega-Lite SVG renderer not available.');
-    const svg = await fn(spec, { width, height });
-    return { svg };
-  }
-  const fn = mod.vlToPng || mod.vlToPNG || mod.default?.vlToPng;
-  if (!fn) throw new Error('Vega-Lite PNG renderer not available.');
-  const png = await fn(spec, { width, height });
-  return { png: Buffer.from(png) };
+  const vlSpec = { ...(spec || {}) };
+  if (!('width' in vlSpec)) vlSpec.width = width;
+  if (!('height' in vlSpec)) vlSpec.height = height;
+
+  const compiled = vegaLite.compile(vlSpec);
+  const vgSpec = compiled?.spec || compiled;
+  const view = new vega.View(vega.parse(vgSpec), {
+    renderer: 'none',
+    loader: vegaLoader(),
+    logger: vega.logger(vega.Warn)
+  }).initialize();
+
+  const svg = await view.toSVG();
+  if (fmt === 'svg') return { svg };
+  return { png: await svgToPng({ svg, width, height }) };
 }
 
 export async function renderDiagram({ code, format, width = 1200, height = 800, theme = 'default' }) {

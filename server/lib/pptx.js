@@ -2431,18 +2431,20 @@ async function renderChartBar(pptx, slide, theme, imageFile, tmpDir, imgCropCach
 
   const chart = slide.chart || { labels: [], values: [], value_suffix: '' };
   if (chart?.spec) {
-    const data = await renderGraphicData({
-      type: 'chart',
-      payload: chart,
-      width: 1200,
-      height: 700,
-      theme
-    });
-    if (data) {
-      s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
-      if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
-      return;
-    }
+    try {
+      const data = await renderGraphicData({
+        type: 'chart',
+        payload: chart,
+        width: 1200,
+        height: 700,
+        theme
+      });
+      if (data) {
+        s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
+        if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+        return;
+      }
+    } catch {}
   }
   const labels = safeArr(chart.labels).slice(0, 8);
   const values = safeArr(chart.values).slice(0, labels.length).map(Number);
@@ -2479,18 +2481,20 @@ async function renderChartLine(pptx, slide, theme, imageFile, tmpDir, imgCropCac
 
   const chart = slide.chart || { labels: [], values: [], value_suffix: '' };
   if (chart?.spec) {
-    const data = await renderGraphicData({
-      type: 'chart',
-      payload: chart,
-      width: 1200,
-      height: 700,
-      theme
-    });
-    if (data) {
-      s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
-      if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
-      return;
-    }
+    try {
+      const data = await renderGraphicData({
+        type: 'chart',
+        payload: chart,
+        width: 1200,
+        height: 700,
+        theme
+      });
+      if (data) {
+        s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
+        if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+        return;
+      }
+    } catch {}
   }
   const labels = safeArr(chart.labels).slice(0, 10);
   const values = safeArr(chart.values).slice(0, labels.length).map(Number);
@@ -2535,13 +2539,16 @@ async function renderDiagramSlide(pptx, slide, theme, tmpDir, imgCropCache) {
 
   addTitleBlock(s, theme, slide.title, slide.subtitle, '111111');
 
-  const data = await renderGraphicData({
-    type: 'diagram',
-    payload: slide.diagram || {},
-    width: 1200,
-    height: 700,
-    theme
-  });
+  let data = null;
+  try {
+    data = await renderGraphicData({
+      type: 'diagram',
+      payload: slide.diagram || {},
+      width: 1200,
+      height: 700,
+      theme
+    });
+  } catch {}
   if (data) {
     s.addImage({ data, x: 0.9, y: 2.0, w: SLIDE_W - 1.8, h: 5.3 });
   } else {
