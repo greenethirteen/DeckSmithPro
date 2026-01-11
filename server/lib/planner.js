@@ -121,7 +121,8 @@ export const SLIDE_LAYOUTS = [
   'chart_line',
   'org_chart',
   'faq',
-  'appendix'
+  'appendix',
+  'infographic_3'
 ];
 
 // Narrative templates (story-first), not visual templates.
@@ -1268,7 +1269,7 @@ function buildAssembleSystemPrompt({ vibe, audience, language, requestedDeckType
     requestedDeckType === 'ad_agency'
       ? `AGENCY MODE (STRICT): Output EXACTLY 10 slides, in this exact order, with these slide.kind values: title, current_audience, about_brand, challenge, opportunity, communication_pillars, creative_concept, visual_identity, execution_example, thank_you. Do NOT add or remove slides. Do NOT rename kinds. Each slide.section should match the human-friendly page name.`
       : ``,
-    `Prefer the new business layouts when appropriate: timeline, kpi_dashboard, traffic_light, table, pricing, comparison_matrix, process_steps, team_grid, logo_wall, agenda, section_header, swot, funnel, now_next_later, okr, case_study, chart_bar, chart_line, org_chart, faq.`,
+    `Prefer the new business layouts when appropriate: timeline, kpi_dashboard, traffic_light, table, pricing, comparison_matrix, process_steps, team_grid, logo_wall, agenda, section_header, swot, funnel, now_next_later, okr, case_study, chart_bar, chart_line, org_chart, faq, infographic_3.`,
     `Avoid filler. Make it crisp and executive-ready.`,
     `Bullets must carry meaning: each bullet should be 8–18 words, specific, and add new information (no stubs like "Increase awareness").`,
     `Never output empty bullets. No placeholder bullets like "TBD" inside bullets — use speaker_notes for unknowns.`,
@@ -1912,6 +1913,7 @@ function inferLayoutFromKind(kind) {
   if (k.includes('process') || k.includes('steps')) return 'process_steps';
   if (k.includes('team')) return 'team_grid';
   if (k.includes('clients') || k.includes('logos')) return 'logo_wall';
+  if (k.includes('pillar') || k.includes('infographic')) return 'infographic_3';
   if (k.includes('cta') || k.includes('next steps') || k.includes('contact')) return 'cta';
   return null;
 }
@@ -1924,8 +1926,9 @@ export function normalizePlan(plan, options = {}) {
     10
   );
 
-  // Soft cap: we allow variable slide counts.
-  const nSlides = Array.isArray(plan?.slides) ? Math.min(plan.slides.length, requestedSlides) : requestedSlides;
+  const deckType = asStr(plan.deck_type || options.deckType || options.deck_type || plan?._extract?.deck_type_suggestion || 'other', 80)
+    .toLowerCase()
+    .trim();
 
   const theme = { ...defaultTheme(), ...(plan.theme || {}) };
   if (options.deckStyle && !theme.deck_style) theme.deck_style = options.deckStyle;
@@ -1992,7 +1995,7 @@ export function normalizePlan(plan, options = {}) {
     };
 
     // For data-heavy slides, default to no image unless explicitly provided.
-    if (['kpi_dashboard','traffic_light','table','pricing','comparison_matrix','process_steps','team_grid','logo_wall','swot','funnel','now_next_later','okr','chart_bar','chart_line','org_chart','faq','case_study','appendix'].includes(layout)) {
+    if (['kpi_dashboard','traffic_light','table','pricing','comparison_matrix','process_steps','team_grid','logo_wall','swot','funnel','now_next_later','okr','chart_bar','chart_line','org_chart','faq','case_study','appendix','infographic_3'].includes(layout)) {
       const p = (safe.image_prompt || '').trim();
       if (!p || /^none$/i.test(p)) safe.image_prompt = 'NONE';
     }
@@ -2000,15 +2003,62 @@ export function normalizePlan(plan, options = {}) {
     return safe;
   });
 
-  slides = slides.slice(0, nSlides);
+  if (deckType !== 'ad_agency') {
+    const hasQuote = slides.some(s => s.layout === 'quote' || (s.kind || '').toLowerCase().includes('quote'));
+    const hasInfographic = slides.some(s => s.layout === 'infographic_3' || (s.kind || '').toLowerCase().includes('pillar'));
+
+    if (!hasInfographic) {
+      slides.splice(Math.min(2, slides.length), 0, {
+        kind: 'infographic_summary',
+        layout: 'infographic_3',
+        title: 'Speak Locally. Resonate Nationally.',
+        subtitle: 'Our strategy turns complexity into three simple pillars:',
+        cards: [
+          { title: 'Hyper-Local Pride', body: 'Celebrate unique identity and local cues.', tag: 'pin' },
+          { title: 'Universal Invitation', body: 'Unify the campaign under one idea.', tag: 'signal' },
+          { title: 'Simplicity & Clarity', body: 'Make the call-to-action unforgettable.', tag: 'hashtag' }
+        ],
+        image_prompt: 'NONE',
+        speaker_notes: ''
+      });
+    }
+
+    if (!hasQuote) {
+      const quoteText = asStr(plan?._extract?.objective || plan?._extract?.source_summary || 'A single, memorable idea beats a dozen scattered messages.', 260);
+      slides.splice(Math.max(slides.length - 1, 1), 0, {
+        kind: 'quote',
+        layout: 'quote',
+        title: 'Key Thought',
+        subtitle: '',
+        quote: { text: quoteText, attribution: '' },
+        image_prompt: 'Abstract premium background, subtle texture, no text',
+        speaker_notes: ''
+      });
+    }
+  }
+
+  while (slides.length > requestedSlides) {
+    let removed = false;
+    for (let i = slides.length - 1; i >= 0; i--) {
+      const layout = (slides[i]?.layout || '').toString().toLowerCase();
+      if (layout === 'quote' || layout === 'infographic_3') continue;
+      slides.splice(i, 1);
+      removed = true;
+      break;
+    }
+    if (!removed) break;
+  }
+
+  slides = slides.slice(0, requestedSlides);
 
   return {
-    deck_type: asStr(plan.deck_type || options.deckType || options.deck_type || plan?._extract?.deck_type_suggestion || 'other', 80),
+    deck_type: deckType,
     deck_title: asStr(plan.deck_title || plan?._extract?.title || 'Untitled Deck', 140),
     deck_subtitle: asStr(plan.deck_subtitle || plan?._extract?.subtitle || '', 200),
     recommended_slide_count: clampInt(plan.recommended_slide_count ?? requestedSlides, 5, SAFE_MAX_SLIDES, requestedSlides),
     theme,
     slides,
+    brand_logo: plan?.brand_logo || plan?.theme?.brand_logo || null,
     _extract: plan?._extract || null
   };
 }

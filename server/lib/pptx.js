@@ -85,6 +85,21 @@ function panelStyle(theme, overrides = {}) {
   };
 }
 
+function svgToDataUri(svg) {
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+function infographicIconSvg(kind, color) {
+  const stroke = color || '#F04C2E';
+  if (kind === 'signal') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="${stroke}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><circle cx="60" cy="60" r="10"/><circle cx="60" cy="60" r="26"/><circle cx="60" cy="60" r="42"/></svg>`;
+  }
+  if (kind === 'hashtag') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="${stroke}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><line x1="40" y1="20" x2="32" y2="100"/><line x1="78" y1="20" x2="70" y2="100"/><line x1="20" y1="44" x2="100" y2="44"/><line x1="16" y1="76" x2="96" y2="76"/><circle cx="92" cy="92" r="16"/></svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none" stroke="${stroke}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><path d="M60 110C60 110 32 76 32 50C32 33 45 20 60 20C75 20 88 33 88 50C88 76 60 110 60 110Z"/><circle cx="60" cy="50" r="12"/></svg>`;
+}
+
 function addSlideFrame(slide, pptx, theme) {
   const bw = Number.isFinite(+theme.style?.borderWidth) ? +theme.style.borderWidth : 0;
   if (bw <= 0) return;
@@ -92,6 +107,39 @@ function addSlideFrame(slide, pptx, theme) {
     x: 0.12, y: 0.12, w: SLIDE_W - 0.24, h: SLIDE_H - 0.24,
     fill: { color: 'FFFFFF', transparency: 100 },
     line: { color: theme.secondary, width: bw }
+  });
+}
+
+async function resolveBrandLogo(plan, options, tmpDir) {
+  const raw = (options.brandLogo || plan.brand_logo || plan.theme?.brand_logo || '').toString().trim();
+  if (!raw) return null;
+  if (raw.startsWith('data:image/')) return { data: raw };
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const res = await fetch(raw);
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      const outPath = path.join(tmpDir, `brand_logo_${Date.now()}.png`);
+      await fs.writeFile(outPath, buf);
+      return { path: outPath };
+    } catch {
+      return null;
+    }
+  }
+  if (await fs.pathExists(raw)) return { path: raw };
+  return null;
+}
+
+function addBrandLogoToSlide(slide, logo) {
+  if (!logo || !slide) return;
+  const logoH = 0.35;
+  const logoW = 1.4;
+  slide.addImage({
+    ...(logo.path ? { path: logo.path } : { data: logo.data }),
+    x: SLIDE_W - logoW - 0.5,
+    y: 0.35,
+    w: logoW,
+    h: logoH
   });
 }
 
@@ -176,6 +224,8 @@ export async function exportPptx(plan, options = {}, ctx = {}) {
     deckStyle: theme.style?.id
   });
 
+  const brandLogo = await resolveBrandLogo(plan, options, tmpDir);
+
   ctx.onStatus?.({ phase: 'images_ready', message: 'Images ready. Rendering slides…' });
 
   // Slide rendering
@@ -192,6 +242,10 @@ export async function exportPptx(plan, options = {}, ctx = {}) {
 
     const imageFile = imgMap?.[i]?.file || null;
     await renderByLayout(pptx, s, plan, theme, imageFile, i, tmpDir, imgCropCache);
+    const renderedSlide = pptx._slides?.[pptx._slides.length - 1];
+    if (renderedSlide && brandLogo) {
+      addBrandLogoToSlide(renderedSlide, brandLogo);
+    }
 
     // Optional: true live thumbnails via LibreOffice conversion.
     // NOTE: This is intentionally "easy mode" (writes partial PPTX + converts after each slide).
@@ -283,6 +337,8 @@ async function renderByLayout(pptx, slide, plan, theme, imageFile, idx, tmpDir, 
       return renderFAQ(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
     case 'appendix':
       return renderAppendix(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
+    case 'infographic_3':
+      return renderInfographic3(pptx, slide, theme);
     case 'full_bleed':
       return renderFullBleed(pptx, slide, theme, imageFile, tmpDir, imgCropCache);
     case 'quote':
@@ -535,6 +591,66 @@ async function renderQuote(pptx, slide, theme, imageFile, tmpDir, imgCropCache) 
     ...bodyStyle(theme, 12),
     color: theme.primary
   });
+
+  if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
+}
+
+async function renderInfographic3(pptx, slide, theme) {
+  const s = pptx.addSlide();
+  addSlideFrame(s, pptx, theme);
+  s.background = { color: 'FFFFFF' };
+
+  s.addText(slide.title || 'Three Pillars', {
+    x: 0.9, y: 0.6, w: SLIDE_W - 1.8, h: 0.8,
+    ...headlineStyle(theme, 36),
+    color: '111111',
+    align: 'center'
+  });
+
+  if (slide.subtitle) {
+    s.addText(slide.subtitle, {
+      x: 1.6, y: 1.45, w: SLIDE_W - 3.2, h: 0.6,
+      ...bodyStyle(theme, 16),
+      color: '444444',
+      align: 'center'
+    });
+  }
+
+  const cards = safeArr(slide.cards).slice(0, 3);
+  const items = cards.length ? cards : [
+    { title: 'Pillar One', body: 'Description.', tag: 'pin' },
+    { title: 'Pillar Two', body: 'Description.', tag: 'signal' },
+    { title: 'Pillar Three', body: 'Description.', tag: 'hashtag' }
+  ];
+
+  const colW = (SLIDE_W - 2.4) / 3;
+  const iconSize = 1.6;
+  const iconY = 2.6;
+
+  for (let i = 0; i < 3; i++) {
+    const x = 0.8 + i * colW;
+    const iconX = x + (colW - iconSize) / 2;
+    const iconKind = (items[i]?.tag || '').toString().toLowerCase();
+    const svg = infographicIconSvg(iconKind, theme.secondary);
+    s.addImage({ data: svgToDataUri(svg), x: iconX, y: iconY, w: iconSize, h: iconSize });
+
+    s.addText([
+      { text: `${i + 1}. `, options: { color: theme.secondary } },
+      { text: items[i]?.title || `Pillar ${i + 1}` }
+    ], {
+      x, y: 4.35, w: colW - 0.2, h: 0.5,
+      ...headlineStyle(theme, 16),
+      color: '111111',
+      align: 'center'
+    });
+
+    s.addText(items[i]?.body || '—', {
+      x, y: 4.9, w: colW - 0.2, h: 1.4,
+      ...bodyStyle(theme, 12),
+      color: '444444',
+      align: 'center'
+    });
+  }
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }

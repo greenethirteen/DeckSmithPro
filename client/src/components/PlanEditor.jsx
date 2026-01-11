@@ -74,6 +74,21 @@ export default function PlanEditor({ plan, setPlan }) {
           </div>
         </div>
 
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="block md:col-span-2">
+            <div className="mb-1 text-xs font-semibold text-zinc-600">Brand logo (URL, file path, or data URI)</div>
+            <input
+              value={(plan?.brand_logo || '').toString()}
+              onChange={(e) => setPlan(p => ({ ...(p || {}), brand_logo: e.target.value }))}
+              className="w-full rounded-xl border border-white/60 bg-white px-3 py-2 text-sm"
+              placeholder="https://example.com/logo.png"
+            />
+            <div className="mt-1 text-[11px] text-zinc-500">
+              When provided, the logo is placed on each slide during export.
+            </div>
+          </label>
+        </div>
+
         {view === 'json' ? (
           <textarea
             className="mt-4 h-[520px] w-full rounded-2xl border border-white/60 bg-white p-3 font-mono text-[12px] outline-none focus:border-white/80"
