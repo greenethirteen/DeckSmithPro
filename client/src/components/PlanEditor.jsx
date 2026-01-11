@@ -94,6 +94,7 @@ export default function PlanEditor({ plan, setPlan }) {
               const title = (s?.title || '').toString()
               const subtitle = (s?.subtitle || '').toString()
               const bullets = safeArray(s?.bullets)
+              const imagePrompt = (s?.image_prompt || '').toString()
 
               return (
                 <div key={idx} id={`slide-${idx}`} className="rounded-2xl border border-white/60 p-4">
@@ -129,6 +130,36 @@ export default function PlanEditor({ plan, setPlan }) {
                         className="h-28 w-full rounded-xl border border-white/60 bg-white px-3 py-2 text-sm"
                         placeholder="• ..."
                       />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <div className="mb-1 text-xs font-semibold text-zinc-600">Background image prompt</div>
+                        <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-500">
+                          <button
+                            type="button"
+                            onClick={() => updateSlide(idx, { image_prompt: 'NONE' })}
+                            className="rounded-md border border-white/70 bg-white px-2 py-0.5 hover:bg-white/70"
+                          >
+                            Use none
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateSlide(idx, { image_prompt: '' })}
+                            className="rounded-md border border-white/70 bg-white px-2 py-0.5 hover:bg-white/70"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        value={imagePrompt}
+                        onChange={(e) => updateSlide(idx, { image_prompt: e.target.value })}
+                        className="h-24 w-full rounded-xl border border-white/60 bg-white px-3 py-2 text-sm"
+                        placeholder="Describe the background image you want for this slide."
+                      />
+                      <div className="mt-1 text-[11px] text-zinc-500">
+                        This prompt replaces the background image for this slide on export.
+                      </div>
                     </label>
                   </div>
                 </div>
