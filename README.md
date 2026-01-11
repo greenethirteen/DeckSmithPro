@@ -26,3 +26,11 @@ Client:
 npm --prefix client install
 npm --prefix client run dev
 ```
+
+## Graphics renderer (optional)
+
+Environment toggles:
+- `PPTX_GRAPHICS_PREFER_SVG` (default `true`)
+- `PPTX_GRAPHICS_FORCE_PNG` (default `false`)
+- `ICONIFY_API_BASE` (default `https://api.iconify.design`)
+- `MERMAID_CLI_PATH` (optional path to `mmdc` if not in `node_modules/.bin`)
