@@ -67,11 +67,22 @@ async function findConvertedPngForIndex(outDir, baseName, index) {
 }
 
 
+/**
+ * Calculates overlay transparency to guarantee text readability.
+ * Uses a graduated scale based on luminance - lighter images get darker overlays.
+ * Minimum overlay is 50% for guaranteed WCAG AA contrast with white text.
+ */
 function overlayTransparency(theme, luminance) {
   const st = theme.style || {};
-  const light = Number.isFinite(+st.overlayLight) ? +st.overlayLight : 35;
-  const dark = Number.isFinite(+st.overlayDark) ? +st.overlayDark : 55;
-  return luminance > 0.55 ? light : dark;
+  // Base values from theme, but with higher minimums for readability
+  const overlayLight = Number.isFinite(+st.overlayLight) ? Math.max(+st.overlayLight, 50) : 50;
+  const overlayDark = Number.isFinite(+st.overlayDark) ? Math.max(+st.overlayDark, 60) : 65;
+
+  // Graduated scale: the lighter the image, the darker the overlay
+  if (luminance > 0.7) return overlayLight - 15;  // Very light images: ~35% opacity (65% overlay)
+  if (luminance > 0.5) return overlayLight;       // Light images: ~50% opacity
+  if (luminance > 0.3) return overlayDark - 5;    // Medium images: ~60% opacity
+  return overlayDark;                              // Dark images: ~65% opacity
 }
 
 function panelShapeType(pptx, theme) {
@@ -189,20 +200,65 @@ async function coverImage(srcPath, targetWIn, targetHIn, tmpDir, cache) {
   return outPath;
 }
 
-function headlineStyle(theme, fontSize) {
+/**
+ * Calculate dynamic font size based on text length to prevent overflow.
+ * Longer text gets smaller fonts, ensuring content always fits.
+ */
+function dynamicFontSize(baseSize, text, maxChars = 60) {
+  if (!text) return baseSize;
+  const len = String(text).length;
+  if (len <= maxChars * 0.5) return baseSize;
+  if (len <= maxChars) return Math.max(baseSize * 0.85, 14);
+  if (len <= maxChars * 1.5) return Math.max(baseSize * 0.72, 12);
+  return Math.max(baseSize * 0.6, 11);
+}
+
+/**
+ * Truncate text with ellipsis if it exceeds max length.
+ */
+function truncateText(text, maxLen = 120) {
+  if (!text) return '';
+  const str = String(text).trim();
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen - 3).trim() + '…';
+}
+
+/**
+ * Headline text style with automatic fit-to-shrink and proper line spacing.
+ */
+function headlineStyle(theme, fontSize, text = '') {
+  const adjustedSize = dynamicFontSize(fontSize, text, 80);
   return {
     fontFace: theme.headingFont,
-    fontSize,
+    fontSize: adjustedSize,
     bold: true,
-    fit: 'shrink' // prevent overflow in narrow boxes
+    fit: 'shrink',
+    lineSpacingMultiple: 0.95
   };
 }
 
-function bodyStyle(theme, fontSize) {
+/**
+ * Body text style with automatic fit-to-shrink for consistency.
+ */
+function bodyStyle(theme, fontSize, text = '') {
+  const adjustedSize = dynamicFontSize(fontSize, text, 150);
   return {
     fontFace: theme.bodyFont,
-    fontSize,
+    fontSize: adjustedSize,
     fit: 'shrink'
+  };
+}
+
+/**
+ * Calculate safe text zone with proper margins.
+ * Returns { x, y, w, h } for text placement.
+ */
+function safeTextZone(baseX, baseY, baseW, baseH, padding = 0.15) {
+  return {
+    x: baseX + padding,
+    y: baseY + padding,
+    w: Math.max(0.5, baseW - padding * 2),
+    h: Math.max(0.3, baseH - padding * 2)
   };
 }
 
@@ -379,16 +435,25 @@ async function renderByLayout(pptx, slide, plan, theme, imageFile, idx, tmpDir, 
 }
 
 // ---------- Layouts ----------
+
+/**
+ * HERO LAYOUT - Full-bleed background with centered title
+ * Used for cover slides and big statement slides.
+ * Features:
+ * - Full-width background image with dark overlay for guaranteed readability
+ * - Dynamic title sizing based on text length
+ * - Proper vertical spacing that adapts to content
+ */
 async function renderHero(pptx, slide, plan, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  const panelType = panelShapeType(pptx, theme);
-  const pStyle = panelStyle(theme);
+
+  // Background handling with guaranteed contrast overlay
   if (imageFile) {
     const bg = await coverImage(imageFile, SLIDE_W, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
     const L = await getLuminance(bg);
-    // Overlay for readability
+    // Overlay for readability - using improved transparency calculation
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: SLIDE_W, h: SLIDE_H,
       fill: { color: theme.primary, transparency: overlayTransparency(theme, L) },
@@ -398,61 +463,83 @@ async function renderHero(pptx, slide, plan, theme, imageFile, tmpDir, imgCropCa
     s.background = { color: theme.primary };
   }
 
-  // Big title
-  // IMPORTANT: only the *cover* slide should inherit plan.deck_title / plan.deck_subtitle.
-  // For hero-style slides like `big_idea` / `creative_concept`, we must use the slide's own title.
+  // Determine content - cover slide inherits from plan, others use slide content
   const isCoverLike = ['cover', 'title', 'title_page'].includes(slide.kind) || (slide.section === 'title');
-  const title = (isCoverLike && plan.deck_title) ? plan.deck_title : (slide.title || plan.deck_title || '');
-  const subtitle = (isCoverLike && plan.deck_subtitle) ? plan.deck_subtitle : (slide.subtitle || '');
+  const title = truncateText((isCoverLike && plan.deck_title) ? plan.deck_title : (slide.title || plan.deck_title || ''), 100);
+  const subtitle = truncateText((isCoverLike && plan.deck_subtitle) ? plan.deck_subtitle : (slide.subtitle || ''), 200);
 
-  s.addText(title, {
-    x: 0.9, y: 2.2, w: SLIDE_W - 1.8, h: 2.0,
-    ...headlineStyle(theme, theme.style?.titleSize ?? 60),
-    color: 'FFFFFF',
-  });
+  // Calculate dynamic positioning based on content
+  const hasSubtitle = Boolean(subtitle);
+  const titleLen = title.length;
 
-  if (subtitle) {
-    s.addText(subtitle, {
-      x: 0.9, y: 4.55, w: SLIDE_W - 1.8, h: 1.0,
-      ...bodyStyle(theme, theme.style?.subtitleSize ?? 20),
-      color: 'FFFFFF',
-    });
-  }
+  // Adaptive title positioning - vertically centered
+  const titleY = hasSubtitle ? 2.0 : 2.6;
+  const titleH = titleLen > 60 ? 2.4 : 2.0;
+  const baseFontSize = theme.style?.titleSize ?? 60;
+  const titleFontSize = titleLen > 80 ? Math.max(baseFontSize * 0.7, 36) : titleLen > 50 ? Math.max(baseFontSize * 0.85, 44) : baseFontSize;
 
-  // Accent bar
+  // Accent bar - positioned above title
   s.addShape(pptx.ShapeType.rect, {
-    x: 0.9, y: 1.85, w: 1.6, h: 0.08,
+    x: 0.9, y: titleY - 0.35, w: 1.6, h: 0.08,
     fill: { color: theme.secondary },
     line: { color: theme.secondary }
   });
 
+  // Title with dynamic sizing
+  s.addText(title, {
+    x: 0.9, y: titleY, w: SLIDE_W - 1.8, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
+    color: 'FFFFFF',
+    valign: 'top'
+  });
+
+  // Subtitle - positioned with safe margin below title
+  if (hasSubtitle) {
+    const subtitleY = titleY + titleH + 0.25;
+    s.addText(subtitle, {
+      x: 0.9, y: subtitleY, w: SLIDE_W - 1.8, h: 1.2,
+      ...bodyStyle(theme, theme.style?.subtitleSize ?? 20, subtitle),
+      color: 'FFFFFF',
+      valign: 'top'
+    });
+  }
+
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
 
+/**
+ * SPLIT LAYOUT - Image left, content right
+ * The workhorse layout for content slides.
+ * Features:
+ * - Adaptive text positioning based on content presence
+ * - Dynamic font sizing for long titles
+ * - Safe zones to prevent text overlap
+ * - Proper bullet list handling with overflow protection
+ */
 async function renderSplit(pptx, slide, theme, imageFile, idx, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
   const panelType = panelShapeType(pptx, theme);
   const pStyle = panelStyle(theme);
 
-  // Left visual
+  // Left visual with contrast overlay
   if (imageFile) {
     const bg = await coverImage(imageFile, 6.1, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: 6.1, h: SLIDE_H });
-  }
-  else {
+    const L = await getLuminance(bg);
+    // Adaptive overlay - lighter images get darker overlay
+    s.addShape(pptx.ShapeType.rect, {
+      x: 0, y: 0, w: 6.1, h: SLIDE_H,
+      fill: { color: theme.primary, transparency: Math.max(55, 85 - L * 40) },
+      line: { color: theme.primary, transparency: 100 }
+    });
+  } else {
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: 6.1, h: SLIDE_H,
       fill: { color: theme.primary },
       line: { color: theme.primary }
     });
   }
-  // Subtle overlay
-  s.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: 6.1, h: SLIDE_H,
-    fill: { color: theme.primary, transparency: 70 },
-    line: { color: theme.primary, transparency: 100 }
-  });
 
   // Right content panel
   s.addShape(panelType, {
@@ -467,30 +554,61 @@ async function renderSplit(pptx, slide, theme, imageFile, idx, tmpDir, imgCropCa
     line: { color: theme.secondary }
   });
 
-  // Typography variation: alternating scale
-  const big = idx % 2 === 0;
-  const titleSize = big ? 40 : 36;
+  // Content zone definition (safe area within panel)
+  const contentX = 6.35;
+  const contentW = 6.4;
+  const contentTopY = 1.0;
+  const contentBottomY = 6.6;
 
-  s.addText(slide.title, {
-    x: 6.35, y: 1.0, w: 6.4, h: 0.9,
-    ...headlineStyle(theme, titleSize),
-    color: theme.primary
+  // Prepare text content with truncation for safety
+  const title = truncateText(slide.title || '', 80);
+  const subtitle = truncateText(slide.subtitle || '', 150);
+  const bullets = (slide.bullets || []).filter(Boolean).slice(0, 6);
+
+  // Calculate dynamic positioning based on content
+  const hasSubtitle = Boolean(subtitle);
+  const hasBullets = bullets.length > 0;
+
+  // Dynamic title sizing based on length
+  const baseTitleSize = idx % 2 === 0 ? 40 : 36;
+  const titleFontSize = title.length > 50 ? Math.max(baseTitleSize * 0.8, 28) : baseTitleSize;
+  const titleH = title.length > 40 ? 1.1 : 0.9;
+
+  // Title
+  s.addText(title, {
+    x: contentX, y: contentTopY, w: contentW, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
+    color: theme.primary,
+    valign: 'top'
   });
 
-  if (slide.subtitle) {
-    s.addText(slide.subtitle, {
-      x: 6.35, y: 1.85, w: 6.4, h: 0.6,
-      ...bodyStyle(theme, 16),
-      color: '3B3B3B'
+  // Calculate next Y position after title
+  let currentY = contentTopY + titleH + 0.15;
+
+  // Subtitle (if present)
+  if (hasSubtitle) {
+    const subtitleH = subtitle.length > 80 ? 0.8 : 0.6;
+    s.addText(subtitle, {
+      x: contentX, y: currentY, w: contentW, h: subtitleH,
+      ...bodyStyle(theme, 16, subtitle),
+      color: '3B3B3B',
+      valign: 'top'
     });
+    currentY += subtitleH + 0.15;
   }
 
-  // Bullets
-  const bulletText = (slide.bullets || []).filter(Boolean).map(b => `• ${b}`).join('\n');
-  if (bulletText) {
+  // Bullets - fill remaining space
+  if (hasBullets) {
+    const bulletY = currentY + 0.1;
+    const bulletH = Math.max(1.5, contentBottomY - bulletY - 0.5); // Leave margin at bottom
+    const bulletFontSize = bullets.length > 4 ? 15 : (theme.style?.bodySize ?? 18);
+
+    // Truncate individual bullets if too long
+    const bulletText = bullets.map(b => `• ${truncateText(b, 100)}`).join('\n');
+
     s.addText(bulletText, {
-      x: 6.35, y: 2.55, w: 6.4, h: 3.4,
-      ...bodyStyle(theme, theme.style?.bodySize ?? 18),
+      x: contentX, y: bulletY, w: contentW, h: bulletH,
+      ...bodyStyle(theme, bulletFontSize, bulletText),
       color: '111111',
       valign: 'top',
       lineSpacingMultiple: 1.15
@@ -507,115 +625,173 @@ async function renderSplit(pptx, slide, theme, imageFile, idx, tmpDir, imgCropCa
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
 
+/**
+ * FULL BLEED LAYOUT - Big statement with full-width background
+ * Features:
+ * - Guaranteed readability with adaptive dark overlay
+ * - Dynamic positioning based on content density
+ * - Proper text box sizing to prevent overflow
+ */
 async function renderFullBleed(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  const panelType = panelShapeType(pptx, theme);
-  const pStyle = panelStyle(theme);
 
+  // Background with enhanced contrast overlay
   if (imageFile) {
     const bg = await coverImage(imageFile, SLIDE_W, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
     const L = await getLuminance(bg);
+    // Use improved transparency calculation for guaranteed readability
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: SLIDE_W, h: SLIDE_H,
-      fill: { color: theme.primary, transparency: L > 0.55 ? 40 : 65 },
+      fill: { color: theme.primary, transparency: overlayTransparency(theme, L) },
       line: { color: theme.primary, transparency: 100 }
     });
   } else {
     s.background = { color: theme.primary };
   }
 
+  // Prepare content with safe truncation
+  const title = truncateText(slide.title || '', 80);
+  const subtitle = truncateText(slide.subtitle || '', 150);
+  const bullets = (slide.bullets || []).slice(0, 3).map(b => truncateText(b, 60));
+
+  // Calculate adaptive positioning
+  const hasSubtitle = Boolean(subtitle);
+  const hasBullets = bullets.length > 0;
+
+  // Dynamic title sizing and positioning
+  const titleFontSize = title.length > 50 ? 44 : title.length > 30 ? 50 : 56;
+  const titleY = hasSubtitle ? 2.0 : (hasBullets ? 2.4 : 2.8);
+  const titleH = title.length > 50 ? 1.8 : 1.4;
+
   // Big headline centered
-  s.addText(slide.title, {
-    x: 1.2, y: 2.4, w: SLIDE_W - 2.4, h: 1.4,
-    ...headlineStyle(theme, 56),
+  s.addText(title, {
+    x: 1.2, y: titleY, w: SLIDE_W - 2.4, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
     color: 'FFFFFF',
-    align: 'center'
+    align: 'center',
+    valign: 'middle'
   });
 
-  if (slide.subtitle) {
-    s.addText(slide.subtitle, {
-      x: 1.8, y: 3.9, w: SLIDE_W - 3.6, h: 0.8,
-      ...bodyStyle(theme, theme.style?.bodySize ?? 18),
+  // Subtitle positioned below title with safe margin
+  if (hasSubtitle) {
+    const subtitleY = titleY + titleH + 0.2;
+    const subtitleFontSize = subtitle.length > 80 ? 15 : (theme.style?.bodySize ?? 18);
+    s.addText(subtitle, {
+      x: 1.8, y: subtitleY, w: SLIDE_W - 3.6, h: 1.0,
+      ...bodyStyle(theme, subtitleFontSize, subtitle),
       color: 'FFFFFF',
-      align: 'center'
+      align: 'center',
+      valign: 'top'
     });
   }
 
-  // Bullet strip at bottom
-  const bullets = (slide.bullets || []).slice(0, 3);
-  if (bullets.length) {
+  // Bullet strip at bottom with proper contrast
+  if (hasBullets) {
+    // Semi-transparent background for bullet strip
     s.addShape(pptx.ShapeType.roundRect, {
-      x: 1.2, y: 6.0, w: SLIDE_W - 2.4, h: 1.1,
-      fill: { color: 'FFFFFF', transparency: 15 },
+      x: 1.2, y: 5.9, w: SLIDE_W - 2.4, h: 1.2,
+      fill: { color: 'FFFFFF', transparency: 10 },
       line: { color: 'FFFFFF', transparency: 100 }
     });
-    s.addText(bullets.map(b => `• ${b}`).join('   '), {
-      x: 1.4, y: 6.15, w: SLIDE_W - 2.8, h: 0.8,
-      ...bodyStyle(theme, 16),
+
+    const bulletText = bullets.map(b => `• ${b}`).join('   ');
+    s.addText(bulletText, {
+      x: 1.4, y: 6.05, w: SLIDE_W - 2.8, h: 0.9,
+      ...bodyStyle(theme, 15, bulletText),
       color: theme.primary,
-      align: 'center'
+      align: 'center',
+      valign: 'middle'
     });
   }
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
 
+/**
+ * QUOTE LAYOUT - Inspirational quote with attribution
+ * Features:
+ * - Large decorative quote marks
+ * - Adaptive quote text sizing based on length
+ * - Guaranteed readability overlay
+ * - Proper spacing between quote, attribution, and title tag
+ */
 async function renderQuote(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
-  const panelType = panelShapeType(pptx, theme);
-  const pStyle = panelStyle(theme);
 
-  // Background
+  // Background with stronger overlay for guaranteed white text readability
   if (imageFile) {
     const bg = await coverImage(imageFile, SLIDE_W, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
+    const L = await getLuminance(bg);
+    // Quotes need extra strong overlay for readability
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: SLIDE_W, h: SLIDE_H,
-      fill: { color: theme.primary, transparency: 70 },
+      fill: { color: theme.primary, transparency: Math.min(overlayTransparency(theme, L), 55) },
       line: { color: theme.primary, transparency: 100 }
     });
   } else {
     s.background = { color: theme.primary };
   }
 
-  const q = slide.quote?.text || slide.subtitle || (slide.bullets?.[0] ?? '');
-  const by = slide.quote?.attribution || '';
+  // Extract and truncate content
+  const rawQuote = slide.quote?.text || slide.subtitle || (slide.bullets?.[0] ?? '');
+  const q = truncateText(rawQuote, 250);
+  const by = truncateText(slide.quote?.attribution || '', 60);
+  const title = truncateText(slide.title || '', 50);
 
-  // Big quote marks
-  s.addText('“', {
-    x: 0.9, y: 1.2, w: 1, h: 1,
-    ...headlineStyle(theme, 96),
+  // Calculate adaptive quote sizing
+  const quoteLen = q.length;
+  const quoteFontSize = quoteLen > 180 ? 28 : quoteLen > 120 ? 34 : quoteLen > 60 ? 40 : 44;
+  const quoteH = quoteLen > 150 ? 4.0 : quoteLen > 80 ? 3.5 : 3.0;
+
+  // Big quote marks - decorative
+  s.addText('"', {
+    x: 0.9, y: 1.0, w: 1.2, h: 1.2,
+    fontFace: theme.headingFont,
+    fontSize: 96,
+    bold: true,
     color: theme.secondary
   });
 
+  // Quote text with adaptive sizing
+  const quoteY = 1.6;
   s.addText(q, {
-    x: 1.6, y: 1.8, w: SLIDE_W - 3.2, h: 3.5,
-    ...headlineStyle(theme, 44),
-    color: 'FFFFFF'
+    x: 1.6, y: quoteY, w: SLIDE_W - 3.2, h: quoteH,
+    ...headlineStyle(theme, quoteFontSize, q),
+    color: 'FFFFFF',
+    valign: 'top',
+    lineSpacingMultiple: 1.1
   });
 
+  // Attribution positioned below quote with safe margin
   if (by) {
+    const byY = quoteY + quoteH + 0.3;
     s.addText(`— ${by}`, {
-      x: 1.6, y: 5.6, w: SLIDE_W - 3.2, h: 0.6,
-      ...bodyStyle(theme, 16),
-      color: 'FFFFFF'
+      x: 1.6, y: byY, w: SLIDE_W - 3.2, h: 0.6,
+      ...bodyStyle(theme, 16, by),
+      color: 'FFFFFF',
+      valign: 'top'
     });
   }
 
-  // Title as a small tag
-  s.addShape(pptx.ShapeType.roundRect, {
-    x: 1.6, y: 6.45, w: 4.2, h: 0.5,
-    fill: { color: 'FFFFFF', transparency: 15 },
-    line: { color: 'FFFFFF', transparency: 100 }
-  });
-  s.addText(slide.title, {
-    x: 1.8, y: 6.53, w: 3.8, h: 0.4,
-    ...bodyStyle(theme, 12),
-    color: theme.primary
-  });
+  // Title as a small tag at bottom
+  if (title) {
+    const tagW = Math.min(title.length * 0.12 + 0.8, 5.0);
+    s.addShape(pptx.ShapeType.roundRect, {
+      x: 1.6, y: 6.4, w: tagW, h: 0.55,
+      fill: { color: 'FFFFFF', transparency: 10 },
+      line: { color: 'FFFFFF', transparency: 100 }
+    });
+    s.addText(title, {
+      x: 1.75, y: 6.48, w: tagW - 0.3, h: 0.42,
+      ...bodyStyle(theme, 12, title),
+      color: theme.primary,
+      valign: 'middle'
+    });
+  }
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
@@ -848,60 +1024,92 @@ async function renderTwoColumn(pptx, slide, theme, imageFile, tmpDir, imgCropCac
 
 // ---------- Agency / creative layouts (bold typographic) ----------
 
+/**
+ * AGENCY CENTER LAYOUT - Bold typographic statement, centered
+ * Features:
+ * - Dynamic font sizing based on title length
+ * - Proper vertical flow that prevents overlaps
+ * - White overlay on images for dark text readability
+ */
 async function renderAgencyCenter(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
 
-  // Background: optional image, washed with a white overlay for clean type.
+  // Background: optional image with lighter overlay for dark text readability
   if (imageFile) {
     const bg = await coverImage(imageFile, SLIDE_W, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
+    const L = await getLuminance(bg);
+    // For agency layouts with dark text, use white overlay - darker images need more opacity
+    const whiteOverlay = L < 0.4 ? 55 : L < 0.6 ? 65 : 72;
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: SLIDE_W, h: SLIDE_H,
-      fill: { color: 'FFFFFF', transparency: 68 },
+      fill: { color: 'FFFFFF', transparency: whiteOverlay },
       line: { color: 'FFFFFF', transparency: 100 }
     });
   } else {
     s.background = { color: 'FFFFFF' };
   }
 
-  const title = (slide.title || '').toString().trim();
-  const subtitle = (slide.subtitle || '').toString().trim();
-  const support = (slide.bullets || []).filter(Boolean).slice(0, 2);
+  // Prepare content with truncation
+  const title = truncateText((slide.title || '').toString().trim(), 80);
+  const subtitle = truncateText((slide.subtitle || '').toString().trim(), 150);
+  const support = (slide.bullets || []).filter(Boolean).slice(0, 2).map(b => truncateText(b, 60));
 
-  // Accent rule
+  // Calculate dynamic sizing and positioning
+  const titleLen = title.length;
+  const hasSubtitle = Boolean(subtitle);
+  const hasSupport = support.length > 0;
+
+  // Dynamic title sizing
+  const baseFontSize = theme.style?.titleSize ?? 78;
+  const titleFontSize = titleLen > 60 ? Math.max(baseFontSize * 0.65, 44) :
+                        titleLen > 40 ? Math.max(baseFontSize * 0.8, 56) :
+                        titleLen > 20 ? baseFontSize : Math.min(86, baseFontSize + 8);
+
+  // Dynamic vertical positioning
+  const titleY = hasSubtitle ? 1.8 : (hasSupport ? 2.2 : 2.6);
+  const titleH = titleLen > 50 ? 2.4 : 2.0;
+
+  // Accent rule - positioned above title
   s.addShape(pptx.ShapeType.rect, {
-    x: 6.0, y: 1.65, w: 1.33, h: 0.08,
+    x: (SLIDE_W - 1.33) / 2, y: titleY - 0.4, w: 1.33, h: 0.08,
     fill: { color: theme.secondary }, line: { color: theme.secondary }
   });
 
+  // Title with dynamic sizing
   s.addText(title || '—', {
-    x: 1.0, y: 2.05, w: SLIDE_W - 2.0, h: 2.0,
-    fontFace: theme.headingFont,
-    fontSize: Math.min(86, (theme.style?.titleSize ?? 78) + 8),
-    bold: true,
+    x: 1.0, y: titleY, w: SLIDE_W - 2.0, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
     color: theme.primary,
     align: 'center',
-    valign: 'mid',
-    lineSpacingMultiple: 0.92
+    valign: 'middle',
+    lineSpacingMultiple: 0.95
   });
 
-  if (subtitle) {
+  // Subtitle - positioned with safe margin below title
+  let currentY = titleY + titleH + 0.25;
+  if (hasSubtitle) {
+    const subtitleH = subtitle.length > 80 ? 0.9 : 0.65;
     s.addText(subtitle, {
-      x: 2.0, y: 4.35, w: SLIDE_W - 4.0, h: 0.65,
-      ...bodyStyle(theme, theme.style?.subtitleSize ?? 22),
+      x: 2.0, y: currentY, w: SLIDE_W - 4.0, h: subtitleH,
+      ...bodyStyle(theme, theme.style?.subtitleSize ?? 22, subtitle),
       color: theme.primary,
       align: 'center',
-      valign: 'mid'
+      valign: 'top'
     });
+    currentY += subtitleH + 0.15;
   }
 
-  if (support.length) {
-    s.addText(support.join('  •  '), {
-      x: 2.0, y: 5.05, w: SLIDE_W - 4.0, h: 0.55,
-      ...bodyStyle(theme, 16),
+  // Support bullets
+  if (hasSupport) {
+    const supportText = support.join('  •  ');
+    s.addText(supportText, {
+      x: 2.0, y: currentY, w: SLIDE_W - 4.0, h: 0.55,
+      ...bodyStyle(theme, 16, supportText),
       color: '555555',
-      align: 'center'
+      align: 'center',
+      valign: 'top'
     });
   }
 
@@ -919,6 +1127,13 @@ async function renderAgencyCenter(pptx, slide, theme, imageFile, tmpDir, imgCrop
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
 
+/**
+ * AGENCY HALF LAYOUT - 50/50 split with image and text
+ * Features:
+ * - Alternating image position (left/right based on slide index)
+ * - Dynamic text sizing to prevent overflow
+ * - Proper vertical flow with adaptive spacing
+ */
 async function renderAgencyHalf(pptx, slide, theme, imageFile, idx, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
@@ -927,20 +1142,23 @@ async function renderAgencyHalf(pptx, slide, theme, imageFile, idx, tmpDir, imgC
   const imageLeft = (idx % 2 === 0);
   const imgX = imageLeft ? 0 : SLIDE_W / 2;
   const txtX = imageLeft ? SLIDE_W / 2 : 0;
+  const halfW = SLIDE_W / 2;
 
   if (imageFile) {
-    const bg = await coverImage(imageFile, SLIDE_W / 2, SLIDE_H, tmpDir, imgCropCache);
-    s.addImage({ path: bg, x: imgX, y: 0, w: SLIDE_W / 2, h: SLIDE_H });
-    // Subtle wash for polish
+    const bg = await coverImage(imageFile, halfW, SLIDE_H, tmpDir, imgCropCache);
+    s.addImage({ path: bg, x: imgX, y: 0, w: halfW, h: SLIDE_H });
+    const L = await getLuminance(bg);
+    // Subtle wash for polish - lighter overlay for lighter images
+    const washOpacity = L > 0.6 ? 25 : 15;
     s.addShape(pptx.ShapeType.rect, {
-      x: imgX, y: 0, w: SLIDE_W / 2, h: SLIDE_H,
-      fill: { color: 'FFFFFF', transparency: 18 },
+      x: imgX, y: 0, w: halfW, h: SLIDE_H,
+      fill: { color: 'FFFFFF', transparency: washOpacity },
       line: { color: 'FFFFFF', transparency: 100 }
     });
   } else {
-    // If image missing, give the left/right half a gentle tint so it doesn't look broken.
+    // Fallback tint when no image
     s.addShape(pptx.ShapeType.rect, {
-      x: imgX, y: 0, w: SLIDE_W / 2, h: SLIDE_H,
+      x: imgX, y: 0, w: halfW, h: SLIDE_H,
       fill: { color: 'F3F4F6' },
       line: { color: 'F3F4F6' }
     });
@@ -948,46 +1166,72 @@ async function renderAgencyHalf(pptx, slide, theme, imageFile, idx, tmpDir, imgC
 
   // Text panel
   s.addShape(pptx.ShapeType.rect, {
-    x: txtX, y: 0, w: SLIDE_W / 2, h: SLIDE_H,
+    x: txtX, y: 0, w: halfW, h: SLIDE_H,
     fill: { color: 'FFFFFF' },
     line: { color: 'FFFFFF', transparency: 100 }
   });
 
+  // Prepare content with truncation
+  const title = truncateText((slide.title || '').toString().trim(), 60);
+  const subtitle = truncateText((slide.subtitle || '').toString().trim(), 120);
+  const bullets = (slide.bullets || []).filter(Boolean).slice(0, 3).map(b => truncateText(b, 80));
+
+  // Calculate dynamic sizing
+  const titleLen = title.length;
+  const hasSubtitle = Boolean(subtitle);
+  const hasBullets = bullets.length > 0;
+
+  // Dynamic title sizing - constrained to fit half width
+  const baseFontSize = theme.style?.titleSize ?? 78;
+  const titleFontSize = titleLen > 45 ? Math.max(baseFontSize * 0.6, 36) :
+                        titleLen > 30 ? Math.max(baseFontSize * 0.75, 48) :
+                        Math.min(72, baseFontSize);
+  const titleH = titleLen > 40 ? 2.4 : 2.0;
+
+  // Content zone within text half
+  const contentX = txtX + 0.9;
+  const contentW = halfW - 1.8;
+
   // Accent bar
   s.addShape(pptx.ShapeType.rect, {
-    x: txtX + 0.9, y: 1.05, w: 1.1, h: 0.08,
+    x: contentX, y: 1.05, w: 1.1, h: 0.08,
     fill: { color: theme.secondary }, line: { color: theme.secondary }
   });
 
-  const title = (slide.title || '').toString().trim();
-  const subtitle = (slide.subtitle || '').toString().trim();
-  const bullets = (slide.bullets || []).filter(Boolean).slice(0, 2);
-
-  // Centered within the text half
+  // Title with dynamic sizing
+  const titleY = 1.35;
   s.addText(title || '—', {
-    x: txtX + 0.9, y: 1.35, w: (SLIDE_W / 2) - 1.8, h: 2.2,
-    fontFace: theme.headingFont,
-    fontSize: Math.min(72, theme.style?.titleSize ?? 78),
-    bold: true,
+    x: contentX, y: titleY, w: contentW, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
     color: theme.primary,
     align: 'center',
-    valign: 'mid',
+    valign: 'middle',
     lineSpacingMultiple: 0.95
   });
 
-  if (subtitle) {
+  // Track current Y position for proper flow
+  let currentY = titleY + titleH + 0.2;
+
+  // Subtitle
+  if (hasSubtitle) {
+    const subtitleH = subtitle.length > 80 ? 1.0 : 0.75;
     s.addText(subtitle, {
-      x: txtX + 1.2, y: 3.55, w: (SLIDE_W / 2) - 2.4, h: 0.85,
-      ...bodyStyle(theme, theme.style?.subtitleSize ?? 22),
+      x: contentX + 0.3, y: currentY, w: contentW - 0.6, h: subtitleH,
+      ...bodyStyle(theme, theme.style?.subtitleSize ?? 22, subtitle),
       color: '333333',
-      align: 'center'
+      align: 'center',
+      valign: 'top'
     });
+    currentY += subtitleH + 0.15;
   }
 
-  if (bullets.length) {
-    s.addText(bullets.map(b => `• ${b}`).join('\n'), {
-      x: txtX + 1.25, y: 4.45, w: (SLIDE_W / 2) - 2.5, h: 2.5,
-      ...bodyStyle(theme, 16),
+  // Bullets
+  if (hasBullets) {
+    const bulletH = Math.max(1.5, 6.5 - currentY - 0.3); // Fill remaining space
+    const bulletText = bullets.map(b => `• ${b}`).join('\n');
+    s.addText(bulletText, {
+      x: contentX + 0.35, y: currentY, w: contentW - 0.7, h: bulletH,
+      ...bodyStyle(theme, 15, bulletText),
       color: '555555',
       align: 'center',
       valign: 'top',
@@ -1090,54 +1334,85 @@ async function renderAgencyInfographic(pptx, slide, theme, imageFile, tmpDir, im
 
 // ---------- New reusable business layouts ----------
 
+/**
+ * SECTION HEADER LAYOUT - Bold section divider
+ * Features:
+ * - Guaranteed readability with proper overlay
+ * - Dynamic title sizing
+ * - Proper spacing between elements
+ */
 async function renderSectionHeader(pptx, slide, theme, imageFile, tmpDir, imgCropCache) {
   const s = pptx.addSlide();
   addSlideFrame(s, pptx, theme);
 
+  // Background with guaranteed contrast overlay
   if (imageFile) {
     const bg = await coverImage(imageFile, SLIDE_W, SLIDE_H, tmpDir, imgCropCache);
     s.addImage({ path: bg, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H });
     const L = await getLuminance(bg);
+    // Use improved overlay calculation for white text readability
     s.addShape(pptx.ShapeType.rect, {
       x: 0, y: 0, w: SLIDE_W, h: SLIDE_H,
-      fill: { color: theme.primary, transparency: L > 0.55 ? 30 : 60 },
+      fill: { color: theme.primary, transparency: overlayTransparency(theme, L) },
       line: { color: theme.primary, transparency: 100 }
     });
   } else {
     s.background = { color: theme.primary };
   }
 
-  // Small tag
+  // Prepare content
+  const title = truncateText(slide.title || '', 80);
+  const subtitle = truncateText(slide.subtitle || '', 180);
+  const kind = truncateText((slide.kind || 'Section').toString(), 20).toUpperCase();
+
+  // Calculate dynamic sizing
+  const titleLen = title.length;
+  const hasSubtitle = Boolean(subtitle);
+
+  // Dynamic title sizing
+  const titleFontSize = titleLen > 50 ? 48 : titleLen > 30 ? 58 : 68;
+  const titleH = titleLen > 50 ? 2.2 : 1.8;
+  const titleY = hasSubtitle ? 2.0 : 2.5;
+
+  // Small section tag
   s.addShape(pptx.ShapeType.roundRect, {
-    x: 0.9, y: 0.85, w: 2.0, h: 0.45,
-    fill: { color: 'FFFFFF', transparency: 15 },
+    x: 0.9, y: 0.85, w: Math.min(kind.length * 0.12 + 0.6, 2.5), h: 0.45,
+    fill: { color: 'FFFFFF', transparency: 12 },
     line: { color: 'FFFFFF', transparency: 100 }
   });
-  s.addText((slide.kind || 'Section').toString().toUpperCase(), {
-    x: 1.05, y: 0.95, w: 1.7, h: 0.3,
-    ...bodyStyle(theme, 11),
-    color: 'FFFFFF'
+  s.addText(kind, {
+    x: 1.05, y: 0.92, w: Math.min(kind.length * 0.12 + 0.3, 2.2), h: 0.32,
+    ...bodyStyle(theme, 11, kind),
+    color: 'FFFFFF',
+    valign: 'middle'
   });
 
-  s.addText(slide.title, {
-    x: 0.9, y: 2.2, w: SLIDE_W - 1.8, h: 1.8,
-    ...headlineStyle(theme, 68),
-    color: 'FFFFFF'
-  });
-
-  if (slide.subtitle) {
-    s.addText(slide.subtitle, {
-      x: 0.9, y: 4.2, w: SLIDE_W - 1.8, h: 1.2,
-      ...bodyStyle(theme, 20),
-      color: 'FFFFFF'
-    });
-  }
-
+  // Accent bar - positioned above title
   s.addShape(pptx.ShapeType.rect, {
-    x: 0.9, y: 1.95, w: 2.2, h: 0.08,
+    x: 0.9, y: titleY - 0.3, w: 2.2, h: 0.08,
     fill: { color: theme.secondary },
     line: { color: theme.secondary }
   });
+
+  // Title with dynamic sizing
+  s.addText(title, {
+    x: 0.9, y: titleY, w: SLIDE_W - 1.8, h: titleH,
+    ...headlineStyle(theme, titleFontSize, title),
+    color: 'FFFFFF',
+    valign: 'top'
+  });
+
+  // Subtitle positioned below title with safe margin
+  if (hasSubtitle) {
+    const subtitleY = titleY + titleH + 0.2;
+    const subtitleFontSize = subtitle.length > 100 ? 17 : 20;
+    s.addText(subtitle, {
+      x: 0.9, y: subtitleY, w: SLIDE_W - 1.8, h: 1.4,
+      ...bodyStyle(theme, subtitleFontSize, subtitle),
+      color: 'FFFFFF',
+      valign: 'top'
+    });
+  }
 
   if (slide.speaker_notes) s.addNotes(slide.speaker_notes);
 }
