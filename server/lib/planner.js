@@ -1196,7 +1196,6 @@ function buildDeckSchema() {
                 additionalProperties: false,
                 properties: {
                   chart_type: { type: 'string', enum: ['bar', 'line'] },
-                  spec: { type: ['object', 'null'] },
                   labels: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 10 },
                   values: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 10 },
                   value_suffix: { type: 'string' }
@@ -2030,8 +2029,7 @@ export function normalizePlan(plan, options = {}) {
         chart_type: asStr(s.chart.chart_type || '', 20),
         labels: Array.isArray(s.chart.labels) ? s.chart.labels.slice(0, 10).map(v => asStr(v, 80)) : [],
         values: Array.isArray(s.chart.values) ? s.chart.values.slice(0, 10).map(v => Number(v)) : [],
-        value_suffix: asStr(s.chart.value_suffix || '', 20),
-        spec: s.chart.spec ?? null
+        value_suffix: asStr(s.chart.value_suffix || '', 20)
       } : null,
       org_chart: s?.org_chart ?? null,
       faq: Array.isArray(s?.faq) ? s.faq.slice(0, 8).map(it => ({ q: asStr(it?.q, 140), a: asStr(it?.a, 220) })) : null,

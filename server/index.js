@@ -105,7 +105,11 @@ app.get('/api/health', (req, res) => {
 app.post('/api/plan', upload.single('file'), async (req, res) => {
   try {
     const extraText = (req.body.text || '').toString();
-    const options = req.body.options ? JSON.parse(req.body.options) : {};
+    // Handle options as either JSON string (multipart) or already-parsed object (JSON body)
+    let options = {};
+    if (req.body.options) {
+      options = typeof req.body.options === 'string' ? JSON.parse(req.body.options) : req.body.options;
+    }
     let extractedText = '';
 
     if (req.file) {
